@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Seva Property Dashboard</title>
+
+  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+</head>
+
+<body>
+
+  <div class="app">
+
+    <!-- HEADER -->
+    <div class="header">
+      <h2>📍 Seva Property Map</h2>
+    </div>
+
+    <!-- ACTION BUTTONS -->
+    <div class="container">
+      <div class="actions centered">
+        <button onclick="refreshData()">⟳ Refresh</button>
+        <button onclick="saveCurrent()">💾 Save</button>
+        <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
+        <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
+      </div>
+    </div>
+
+    <!-- FILTERS -->
+    <div class="container">
+      <div class="filters">
+
+<select id="filterCategory">
+  <option value="">Category</option>
+    </select>
+
+    <select id="filterProperty">
+    <option value="">Property</option>
+    </select>
+
+    <select id="filterAppStatus">
+    <option value="">App status</option>
+    </select>
+
+    <select id="filterLeadStatus">
+    <option value="">Lead Status</option>
+    </select>
+
+    <select id="filterNM">
+    <option value="">NM</option>
+    </select>
+
+    <select id="filterMM">
+    <option value="">MM</option>
+    </select>
+
+        <button class="primary" onclick="applyFilters()">Apply</button>
+        <button onclick="clearFilters()">Clear</button>
+
+      </div>
+    </div>
+
+    <!-- MAP -->
+    <div class="container">
+      <div class="map-card">
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <!-- DETAILS -->
+    <div class="container">
+      <div class="details-card">
+        <h3>Details</h3>
+        <table id="detailsTable"></table>
+      </div>
+    </div>
+
+  </div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
