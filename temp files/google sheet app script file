@@ -1,0 +1,93 @@
+const SHEET_NAME = "Sheet1";
+
+function authorizeUrlFetch() {
+  UrlFetchApp.fetch("https://www.google.com");
+}
+
+function doGet(e) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (e.parameter.action === "resolveUrl") {
+  const shortUrl = e.parameter.url;
+  try {
+    // Step 1: fetch WITHOUT following redirects to capture the Location header
+    const r1 = UrlFetchApp.fetch(shortUrl, {
+      followRedirects: false,
+      muteHttpExceptions: true
+    });
+    const redirectUrl = r1.getHeaders()["Location"] || "";
+    
+    // Step 2: if we got a redirect URL, fetch that too (it may redirect again)
+    let finalUrl = redirectUrl;
+    if (redirectUrl && !redirectUrl.match(/@-?\d+\.\d+,-?\d+\.\d+/)) {
+      const r2 = UrlFetchApp.fetch(redirectUrl, {
+        followRedirects: false,
+        muteHttpExceptions: true
+      });
+      finalUrl = r2.getHeaders()["Location"] || redirectUrl;
+    }
+
+    // Step 3: if still no coords in URL, fetch the final page and grep the HTML
+    if (!finalUrl.match(/@-?\d+\.\d+,-?\d+\.\d+/)) {
+      const r3 = UrlFetchApp.fetch(finalUrl || shortUrl, { muteHttpExceptions: true });
+      const body = r3.getContentText();
+      const match = body.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) 
+                 || body.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+      if (match) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ url: finalUrl, lat: match[1], lng: match[2] }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ url: finalUrl }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1).map(r => {
+    let obj = {};
+    headers.forEach((h, i) => obj[h] = r[i]);
+    return obj;
+  });
+  return ContentService
+    .createTextOutput(JSON.stringify(rows))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    const data = JSON.parse(e.postData.contents);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const rows = sheet.getDataRange().getValues();
+    const idIndex = headers.indexOf("Sr. No");
+
+    if (idIndex === -1) return ContentService.createTextOutput("❌ 'Sr. No' column not found");
+
+    let rowIndex = -1;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][idIndex] == data["Sr. No"]) { rowIndex = i + 1; break; }
+    }
+
+    if (rowIndex === -1) return ContentService.createTextOutput("❌ Row not found");
+
+    headers.forEach((h, i) => {
+      if (data[h] !== undefined) sheet.getRange(rowIndex, i + 1).setValue(data[h]);
+    });
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ success: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
