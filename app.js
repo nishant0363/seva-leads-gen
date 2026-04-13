@@ -168,17 +168,45 @@ function dotIcon(color) {
   });
 }
 
-// ── Render functions ─────────────────────────────────────────
+// ── NM/MM lookup for extra-layer rows ────────────────────────
+// Stamps _nm and _mm onto each row by doing a point-in-polygon check.
+// Called once when data first loads; results cached on the row object.
+function stampHoodInfo(rows, latKey, lngKey) {
+  rows.forEach(row => {
+    if (row._nm) return; // already stamped
+    const lat = parseFloat(row[latKey]), lng = parseFloat(row[lngKey]);
+    if (isNaN(lat) || isNaN(lng)) return;
+    const hood = assignHood({ lat, lng });
+    if (hood) {
+      row._nm = hood.nano_market;
+      row._mm = hood.micro_market;
+    }
+  });
+}
+
+// Returns true if the row should be visible given current NM/MM filters
+function passesNMMFilter(row) {
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  if (!filterNM && !filterMM) return true;
+  if (filterNM && row._nm !== filterNM) return false;
+  if (filterMM && row._mm !== filterMM) return false;
+  return true;
+}
+
+// ── Render functions (filter-aware) ──────────────────────────
 function renderHotspots(data) {
   hotspotMarkers.forEach(m => map.removeLayer(m));
   hotspotMarkers = [];
   hotspotData = data;
+  stampHoodInfo(data, "lat", "lng");
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const m = L.marker([lat, lng], { icon: letterIcon("H", "#f39c12") })
-      .bindPopup(`<b>🔥 ${row.name || "Hotspot"}</b><br>Hood: ${row.hood || "-"}<br>Cluster: ${row.cluster || "-"}`);
-    if (layerVisible.hotspots) m.addTo(map);
+      .bindPopup(`<b>🔥 ${row.name || "Hotspot"}</b><br>Hood: ${row.hood || "-"}<br>Cluster: ${row.cluster || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    m._extraRow = row;
+    if (layerVisible.hotspots && passesNMMFilter(row)) m.addTo(map);
     hotspotMarkers.push(m);
   });
   console.log(`📍 ${hotspotMarkers.length} hotspot markers`);
@@ -188,12 +216,14 @@ function renderDemand(data) {
   demandMarkers.forEach(m => map.removeLayer(m));
   demandMarkers = [];
   demandData = data;
+  stampHoodInfo(data, "lat", "lng");
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const m = L.marker([lat, lng], { icon: dotIcon("#2980b9") })
-      .bindPopup(`<b>📦 Demand</b><br>Cluster: ${row.cluster || "-"}<br>Orders: ${row.orders || "-"}`);
-    if (layerVisible.demand) m.addTo(map);
+      .bindPopup(`<b>📦 Demand</b><br>Cluster: ${row.cluster || "-"}<br>Orders: ${row.orders || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    m._extraRow = row;
+    if (layerVisible.demand && passesNMMFilter(row)) m.addTo(map);
     demandMarkers.push(m);
   });
   console.log(`📍 ${demandMarkers.length} demand markers`);
@@ -203,12 +233,14 @@ function renderIdle(data) {
   idleMarkers.forEach(m => map.removeLayer(m));
   idleMarkers = [];
   idleData = data;
+  stampHoodInfo(data, "lat", "lng");
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const m = L.marker([lat, lng], { icon: dotIcon("#c0392b") })
-      .bindPopup(`<b>🚗 Idle</b><br>Cluster: ${row.cluster || "-"}<br>Hood: ${row.hood || "-"}<br>Idle min: ${row.idle_min || "-"}`);
-    if (layerVisible.idle) m.addTo(map);
+      .bindPopup(`<b>🚗 Idle</b><br>Cluster: ${row.cluster || "-"}<br>Hood: ${row.hood || "-"}<br>Idle min: ${row.idle_min || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    m._extraRow = row;
+    if (layerVisible.idle && passesNMMFilter(row)) m.addTo(map);
     idleMarkers.push(m);
   });
   console.log(`📍 ${idleMarkers.length} idle markers`);
@@ -218,16 +250,41 @@ function renderCentroids(data) {
   centroidMarkers.forEach(m => map.removeLayer(m));
   centroidMarkers = [];
   centroidData = data;
+  stampHoodInfo(data, "centroid_lat", "centroid_lng");
   data.forEach(row => {
     const lat = parseFloat(row.centroid_lat), lng = parseFloat(row.centroid_lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const m = L.marker([lat, lng], { icon: letterIcon("C", "#27ae60") })
-      .bindPopup(`<b>📊 ${row.hood_name || "Centroid"}</b><br>Cluster ID: ${row.cluster_id || "-"}`);
-    if (layerVisible.centroids) m.addTo(map);
+      .bindPopup(`<b>📊 ${row.hood_name || "Centroid"}</b><br>Cluster ID: ${row.cluster_id || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    m._extraRow = row;
+    if (layerVisible.centroids && passesNMMFilter(row)) m.addTo(map);
     centroidMarkers.push(m);
   });
   console.log(`📍 ${centroidMarkers.length} centroid markers`);
 }
+
+// ── Filter extra layers by NM/MM ─────────────────────────────
+// Called every time NM/MM filter changes or is cleared.
+function filterExtraLayers() {
+  const sets = [
+    { markerList: hotspotMarkers,  visKey: "hotspots"  },
+    { markerList: demandMarkers,   visKey: "demand"    },
+    { markerList: idleMarkers,     visKey: "idle"      },
+    { markerList: centroidMarkers, visKey: "centroids" },
+  ];
+  sets.forEach(({ markerList, visKey }) => {
+    markerList.forEach(m => {
+      const show = layerVisible[visKey] && passesNMMFilter(m._extraRow || {});
+      show ? (map.hasLayer(m) || m.addTo(map)) : (map.hasLayer(m) && map.removeLayer(m));
+    });
+  });
+}
+
+// ── Filtered data getters for downloads ──────────────────────
+function getFilteredHotspots()  { return hotspotData.filter(passesNMMFilter);  }
+function getFilteredDemand()    { return demandData.filter(passesNMMFilter);    }
+function getFilteredIdle()      { return idleData.filter(passesNMMFilter);      }
+function getFilteredCentroids() { return centroidData.filter(passesNMMFilter);  }
 
 // ============================================================
 // MAIN DATA LOADING
@@ -247,6 +304,17 @@ async function loadData() {
       renderMarkers();
     }
     renderSheetPreview(allData);
+    // Re-apply date filter if one is active, otherwise show all
+    const dateFrom = document.getElementById("dateFrom")?.value;
+    const dateTo   = document.getElementById("dateTo")?.value;
+    if (dateFrom || dateTo) {
+      const dateFiltered = getDateFilteredData();
+      renderSheetPreview(dateFiltered);
+      renderSummaryTables(dateFiltered);
+    } else {
+      renderSheetPreview(allData);
+      renderSummaryTables(allData);
+    }
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -298,12 +366,13 @@ function renderMarkers() {
 // ============================================================
 function applyFilters() {
   activeFilters = {
-    Category:      document.getElementById("filterCategory").value,
-    Property:      document.getElementById("filterProperty").value,
-    "App status":  document.getElementById("filterAppStatus").value,
-    "Lead Status": document.getElementById("filterLeadStatus").value,
-    NM:            document.getElementById("filterNM").value,
-    MM:            document.getElementById("filterMM").value
+    Category:        document.getElementById("filterCategory").value,
+    Property:        document.getElementById("filterProperty").value,
+    "App status":    document.getElementById("filterAppStatus").value,
+    "Lead Status":   document.getElementById("filterLeadStatus").value,
+    "Final Status":  document.getElementById("filterFinalStatus").value,
+    NM:              document.getElementById("filterNM").value,
+    MM:              document.getElementById("filterMM").value
   };
   filterAndRender();
 }
@@ -315,6 +384,7 @@ function filterAndRender() {
   console.log(`🔽 ${filtered.length}/${allData.length} rows match filters`);
   updateHoodVisibility();
   renderFilteredMarkers(filtered);
+  filterExtraLayers();
 }
 
 function renderFilteredMarkers(data) {
@@ -341,16 +411,18 @@ function clearFilters() {
   document.querySelectorAll("select").forEach(s => s.value = "");
   updateHoodVisibility();
   renderMarkers();
+  filterExtraLayers();
 }
 
 function populateFilters() {
   const fields = [
-    { key: "Category",    id: "filterCategory"   },
-    { key: "Property",    id: "filterProperty"   },
-    { key: "App status",  id: "filterAppStatus"  },
-    { key: "Lead Status", id: "filterLeadStatus" },
-    { key: "NM",          id: "filterNM"         },
-    { key: "MM",          id: "filterMM"         }
+    { key: "Category",       id: "filterCategory"    },
+    { key: "Property",       id: "filterProperty"    },
+    { key: "App status",     id: "filterAppStatus"   },
+    { key: "Lead Status",    id: "filterLeadStatus"  },
+    { key: "Final Status",   id: "filterFinalStatus" },
+    { key: "NM",             id: "filterNM"          },
+    { key: "MM",             id: "filterMM"          }
   ];
   fields.forEach(f => {
     const select = document.getElementById(f.id);
@@ -434,7 +506,11 @@ function closeAddPointModal() {
 async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
-  const newRow = { "Lat": parseFloat(lat), "Long": parseFloat(lng) };
+  const newRow = {
+    "Lat": parseFloat(lat),
+    "Long": parseFloat(lng),
+    "Timestamp": formatTimestamp(new Date())   // ← auto-stamp on add
+  };
 
   ADD_POINT_FIELDS.forEach(f => {
     const el = document.getElementById("ap_" + f.key.replace(/[\s.()/]/g,'_'));
@@ -623,6 +699,66 @@ function downloadLayerCSV(type) {
   }
 }
 
+// ── Extra layer downloads ────────────────────────────────────
+
+function extraLayerToCsvWkt(rows, latKey, lngKey, extraCols) {
+  const label = activeFilters.NM || activeFilters.MM || "filtered";
+  const headers = ["WKT", "nm", "mm", ...extraCols];
+  const csvRows = rows
+    .filter(r => !isNaN(parseFloat(r[latKey])) && !isNaN(parseFloat(r[lngKey])))
+    .map(r => {
+      const lat = parseFloat(r[latKey]), lng = parseFloat(r[lngKey]);
+      return [
+        `"POINT(${lng} ${lat})"`,
+        `"${r._nm || ""}"`,
+        `"${r._mm || ""}"`,
+        ...extraCols.map(c => `"${String(r[c] || "").replace(/"/g, '""')}"`)
+      ].join(",");
+    });
+  return [headers.join(","), ...csvRows].join("\n");
+}
+
+function extraLayerToKml(rows, latKey, lngKey, layerName, popupFn) {
+  const placemarks = rows
+    .filter(r => !isNaN(parseFloat(r[latKey])) && !isNaN(parseFloat(r[lngKey])))
+    .map(r => `
+  <Placemark>
+    <n>${escXml(r.name || r.hood_name || "Point")}</n>
+    <description><![CDATA[${popupFn(r)}]]></description>
+    <Point><coordinates>${parseFloat(r[lngKey])},${parseFloat(r[latKey])},0</coordinates></Point>
+  </Placemark>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${placemarks}\n</Document></kml>`;
+}
+
+function downloadExtraLayer(layerType, format) {
+  const label = activeFilters.NM || activeFilters.MM || "all";
+
+  if (layerType === "hotspots") {
+    const data = getFilteredHotspots();
+    if (!data.length) { alert("No hotspot data for current filter."); return; }
+    if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["name", "hood", "cluster"]), `hotspots_${label}.csv`, "text/csv");
+    else downloadBlob(extraLayerToKml(data, "lat", "lng", `Hotspots — ${label}`, r => `Hood: ${r.hood || "-"}<br>Cluster: ${r.cluster || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `hotspots_${label}.kml`, "application/vnd.google-earth.kml+xml");
+
+  } else if (layerType === "demand") {
+    const data = getFilteredDemand();
+    if (!data.length) { alert("No demand data for current filter."); return; }
+    if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["cluster", "orders"]), `demand_${label}.csv`, "text/csv");
+    else downloadBlob(extraLayerToKml(data, "lat", "lng", `Demand — ${label}`, r => `Cluster: ${r.cluster || "-"}<br>Orders: ${r.orders || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `demand_${label}.kml`, "application/vnd.google-earth.kml+xml");
+
+  } else if (layerType === "idle") {
+    const data = getFilteredIdle();
+    if (!data.length) { alert("No idle data for current filter."); return; }
+    if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["cluster", "hood", "idle_min", "w", "hood_pings"]), `idle_${label}.csv`, "text/csv");
+    else downloadBlob(extraLayerToKml(data, "lat", "lng", `Idle — ${label}`, r => `Cluster: ${r.cluster || "-"}<br>Hood: ${r.hood || "-"}<br>Idle min: ${r.idle_min || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `idle_${label}.kml`, "application/vnd.google-earth.kml+xml");
+
+  } else if (layerType === "centroids") {
+    const data = getFilteredCentroids();
+    if (!data.length) { alert("No centroid data for current filter."); return; }
+    if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "centroid_lat", "centroid_lng", ["hood_name", "cluster_id"]), `centroids_${label}.csv`, "text/csv");
+    else downloadBlob(extraLayerToKml(data, "centroid_lat", "centroid_lng", `Centroids — ${label}`, r => `Hood: ${r.hood_name || "-"}<br>Cluster ID: ${r.cluster_id || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `centroids_${label}.kml`, "application/vnd.google-earth.kml+xml");
+  }
+}
+
 // ============================================================
 // URL / COORD RESOLUTION
 // ============================================================
@@ -804,33 +940,139 @@ function showDetails(row) {
   });
 }
 
+// Returns timestamp string in Google Sheets / GForm format: "M/D/YYYY HH:MM:SS"
+function formatTimestamp(date) {
+  const d = date;
+  return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()} ` +
+    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
 function saveCurrent() {
   if (!currentRow) return;
   document.querySelectorAll("[contenteditable]").forEach(cell => {
     currentRow[cell.dataset.key] = cell.innerText;
   });
   if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing"); return; }
+
+  // Always update Timestamp to now on every manual save
+  currentRow["Timestamp"] = formatTimestamp(new Date());
+
   fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
-    .then(() => alert("✅ Saved"))
+    .then(() => {
+      alert("✅ Saved");
+      // Refresh the details table so timestamp shows updated value
+      showDetails(currentRow);
+    })
     .catch(err => alert("❌ Save failed: " + err.message));
 }
 
 // ============================================================
-// SHEET PREVIEW
+// SHEET PREVIEW + DATE FILTER + SUMMARY TABLES
 // ============================================================
+
+// Parse a timestamp value from the sheet — handles Date objects, strings, numbers
+// Explicitly handles:
+//   "M/D/YYYY H:MM:SS"  — plain text written by this app (already IST)
+//   "2026-04-09T19:18:24.000Z" — UTC ISO string from Sheets Date cells (needs +5:30)
+//   Google Sheets serial number — days since 1899-12-30 (UTC, needs +5:30)
+function parseTimestamp(val) {
+  if (!val || val === "") return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : shiftToIST(val);
+
+  // Google Sheets serial number
+  if (typeof val === "number") {
+    return shiftToIST(new Date((val - 25569) * 86400000));
+  }
+
+  const str = val.toString().trim();
+
+  // "M/D/YYYY H:MM:SS" — written by this app, already in IST, construct as local time
+  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (slashMatch) {
+    const [, m, d, y, hr, min, sec] = slashMatch;
+    return new Date(+y, +m - 1, +d, +hr, +min, +sec); // local time, no shift needed
+  }
+
+  // ISO 8601 with Z or +offset — comes from Sheets Date cells, stored as UTC, shift to IST
+  if (str.includes("T") && (str.endsWith("Z") || str.includes("+"))) {
+    const utc = new Date(str);
+    return isNaN(utc.getTime()) ? null : shiftToIST(utc);
+  }
+
+  // Fallback
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Add IST offset (+5:30) to a UTC Date, returning a new Date in IST wall-clock time
+function shiftToIST(utcDate) {
+  return new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
+}
+
+// Format a timestamp value for display in the preview table — always shows IST
+function formatTsDisplay(val) {
+  if (!val || val === "") return "";
+  const d = parseTimestamp(val);
+  if (!d) return String(val); // unparseable — show raw
+  // Format as "D/M/YYYY HH:MM:SS" for display
+  return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ` +
+    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+// Filter allData by the date range pickers
+function getDateFilteredData() {
+  const fromVal = document.getElementById("dateFrom")?.value;
+  const toVal   = document.getElementById("dateTo")?.value;
+  if (!fromVal && !toVal) return allData;
+
+  const from = fromVal ? new Date(fromVal + "T00:00:00") : null;
+  const to   = toVal   ? new Date(toVal   + "T23:59:59") : null;
+
+  return allData.filter(row => {
+    const ts = parseTimestamp(row["Timestamp"]);
+    if (!ts) return false;
+    if (from && ts < from) return false;
+    if (to   && ts > to)   return false;
+    return true;
+  });
+}
+
+function applyDateFilter() {
+  const data = getDateFilteredData();
+  renderSheetPreview(data);
+  renderSummaryTables(data);
+}
+
+function clearDateFilter() {
+  const f = document.getElementById("dateFrom");
+  const t = document.getElementById("dateTo");
+  if (f) f.value = "";
+  if (t) t.value = "";
+  renderSheetPreview(allData);
+  renderSummaryTables(allData);
+}
+
 function renderSheetPreview(data) {
-  const table = document.getElementById("sheetPreviewTable");
+  const table   = document.getElementById("sheetPreviewTable");
   const countEl = document.getElementById("sheetRowCount");
-  if (!data.length) { table.innerHTML = "<tr><td>No data</td></tr>"; return; }
+  if (!data.length) { table.innerHTML = "<tr><td>No data</td></tr>"; countEl.textContent = "0 rows"; return; }
   countEl.textContent = `${data.length} rows`;
-  const previewCols = ["Name of the property", "Name", "Category", "NM", "MM", "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
+
+  const previewCols = ["Timestamp", "Name of the property", "Name", "Category", "NM", "MM",
+    "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
+
   table.innerHTML =
     `<thead><tr>${availableCols.map(c => `<th>${c}</th>`).join("")}</tr></thead>` +
     `<tbody>${data.map((row, idx) => `
       <tr data-idx="${idx}" style="cursor:pointer">
-        ${availableCols.map(c => `<td title="${String(row[c]||'').replace(/"/g,'&quot;')}">${row[c]||""}</td>`).join("")}
+        ${availableCols.map(c => {
+          const raw = row[c] || "";
+          const display = c === "Timestamp" ? formatTsDisplay(row[c]) : raw;
+          return `<td title="${String(raw).replace(/"/g,'&quot;')}">${display}</td>`;
+        }).join("")}
       </tr>`).join("")}</tbody>`;
+
   table.querySelectorAll("tbody tr").forEach(tr => {
     tr.addEventListener("click", () => {
       const idx = parseInt(tr.dataset.idx);
@@ -840,6 +1082,119 @@ function renderSheetPreview(data) {
       document.querySelector(".details-card").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
+
+  renderSummaryTables(data);
+}
+
+// ── Summary tables ────────────────────────────────────────────
+
+// All fields shown in both NM and MM summary sections
+const SUMMARY_FIELDS = [
+  { key: "Category",      label: "Category"      },
+  { key: "Lead Status",   label: "Lead Status"   },
+  { key: "Final Status",  label: "Final Status"  },
+  { key: "App status",    label: "App Status"    },
+  { key: "Property",      label: "Property Type" },
+];
+
+// Build one summary block HTML — groupKey is "NM" or "MM"
+function buildSummaryBlock(data, groupKey, field) {
+  const vals = [...new Set(data.map(r => r[field.key]).filter(Boolean))].sort();
+  if (!vals.length) return "";
+
+  // Group data by groupKey value
+  const groups = {};
+  data.forEach(row => {
+    const g = row[groupKey] || `(No ${groupKey})`;
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(row);
+  });
+  const groupList = Object.keys(groups).sort();
+
+  // Unique table id for CSV download
+  const tableId = `summarytbl_${groupKey}_${field.key.replace(/\s/g,"_")}`;
+
+  const headerRow = `<tr>
+    <th>${groupKey}</th>
+    <th>Total</th>
+    ${vals.map(v => `<th>${escHtml(v)}</th>`).join("")}
+  </tr>`;
+
+  const bodyRows = groupList.map(g => {
+    const rows = groups[g];
+    const counts = {};
+    rows.forEach(r => { const v = r[field.key]; if (v) counts[v] = (counts[v] || 0) + 1; });
+    return `<tr>
+      <td><b>${escHtml(g)}</b></td>
+      <td><b>${rows.length}</b></td>
+      ${vals.map(v => `<td>${counts[v] || 0}</td>`).join("")}
+    </tr>`;
+  }).join("");
+
+  // Totals row
+  const totalCounts = {};
+  vals.forEach(v => { totalCounts[v] = data.filter(r => r[field.key] === v).length; });
+  const totalsRow = `<tr class="summary-total-row">
+    <td><b>Total</b></td>
+    <td><b>${data.length}</b></td>
+    ${vals.map(v => `<td><b>${totalCounts[v] || 0}</b></td>`).join("")}
+  </tr>`;
+
+  return `
+    <div class="summary-block">
+      <div class="summary-block-header">
+        <h4 class="summary-block-title">${field.label} by ${groupKey}</h4>
+        <button class="summary-dl-btn" onclick="downloadSummaryCSV('${tableId}','${field.label} by ${groupKey}')">⬇ CSV</button>
+      </div>
+      <div class="summary-table-wrapper">
+        <table class="summary-table" id="${tableId}">
+          <thead>${headerRow}</thead>
+          <tbody>${bodyRows}${totalsRow}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function escHtml(str) {
+  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Download a rendered summary table as CSV by reading its DOM
+function downloadSummaryCSV(tableId, label) {
+  const table = document.getElementById(tableId);
+  if (!table) { alert("Table not found"); return; }
+
+  const rows = [];
+  table.querySelectorAll("tr").forEach(tr => {
+    const cells = [...tr.querySelectorAll("th,td")].map(td =>
+      `"${td.innerText.replace(/"/g,'""')}"`
+    );
+    rows.push(cells.join(","));
+  });
+
+  const safeLabel = label.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+  const dateTag   = new Date().toISOString().slice(0,10);
+  downloadBlob(rows.join("\n"), `${safeLabel}_${dateTag}.csv`, "text/csv");
+}
+
+function renderSummaryTables(data) {
+  const container = document.getElementById("summaryTablesContainer");
+  if (!container) return;
+  if (!data.length) { container.innerHTML = `<p style="color:#aaa;padding:12px">No data for selected range.</p>`; return; }
+
+  // ── NM-level section ──
+  const nmSection = `
+    <div class="summary-section-title">📍 NM Level Summary</div>
+    ${SUMMARY_FIELDS.map(f => buildSummaryBlock(data, "NM", f)).join("")}
+  `;
+
+  // ── MM-level section ──
+  const mmSection = `
+    <div class="summary-section-title" style="margin-top:28px">🏘 MM Level Summary</div>
+    ${SUMMARY_FIELDS.map(f => buildSummaryBlock(data, "MM", f)).join("")}
+  `;
+
+  container.innerHTML = nmSection + mmSection;
 }
 
 function refreshData() { loadData(); loadExtraLayers(); }

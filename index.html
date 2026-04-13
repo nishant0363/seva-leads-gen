@@ -37,6 +37,7 @@
         <select id="filterProperty"><option value="">Property</option></select>
         <select id="filterAppStatus"><option value="">App status</option></select>
         <select id="filterLeadStatus"><option value="">Lead Status</option></select>
+        <select id="filterFinalStatus"><option value="">Final Status</option></select>
         <select id="filterNM"><option value="">NM</option></select>
         <select id="filterMM"><option value="">MM</option></select>
         <button class="primary" onclick="applyFilters()">Apply</button>
@@ -45,14 +46,24 @@
 
       <!-- DOWNLOAD ROW -->
       <div class="download-row">
-        <span class="download-label">⬇ Download filtered:</span>
+        <span class="download-label">⬇ Properties:</span>
         <button class="dl-btn dl-nm"  onclick="downloadLayerKML('nm')">🗺 NM KML</button>
         <button class="dl-btn dl-mm"  onclick="downloadLayerKML('mm')">🗺 MM KML</button>
-        <button class="dl-btn dl-pt"  onclick="downloadLayerKML('points')">📍 Points KML</button>
-        <span class="dl-sep">|</span>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerKML('points')">📍 KML</button>
         <button class="dl-btn dl-nm"  onclick="downloadLayerCSV('nm')">📄 NM CSV</button>
         <button class="dl-btn dl-mm"  onclick="downloadLayerCSV('mm')">📄 MM CSV</button>
-        <button class="dl-btn dl-pt"  onclick="downloadLayerCSV('points')">📄 Points CSV</button>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerCSV('points')">📄 CSV</button>
+      </div>
+      <div class="download-row">
+        <span class="download-label">⬇ Layers (filtered):</span>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','kml')">🔥 Hotspots KML</button>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','csv')">🔥 Hotspots CSV</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','kml')">📦 Demand KML</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','csv')">📦 Demand CSV</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','kml')">🚗 Idle KML</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','csv')">🚗 Idle CSV</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','kml')">📊 Centroids KML</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','csv')">📊 Centroids CSV</button>
       </div>
     </div>
 
@@ -87,9 +98,31 @@
           <h3>📊 Sheet Preview</h3>
           <span id="sheetRowCount" class="row-count"></span>
         </div>
+
+        <!-- DATE RANGE FILTER -->
+        <div class="date-filter-bar">
+          <span class="date-filter-label">📅 Filter by Timestamp:</span>
+          <input type="date" id="dateFrom" />
+          <span style="color:#888">to</span>
+          <input type="date" id="dateTo" />
+          <button class="primary" onclick="applyDateFilter()">Apply</button>
+          <button onclick="clearDateFilter()">Clear</button>
+        </div>
+
         <div class="sheet-table-wrapper">
           <table id="sheetPreviewTable"></table>
         </div>
+      </div>
+    </div>
+
+    <!-- SUMMARY TABLES -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📈 Summary by NM</h3>
+          <span style="font-size:12px;color:#888">Updates with date filter above</span>
+        </div>
+        <div id="summaryTablesContainer"></div>
       </div>
     </div>
 
@@ -153,6 +186,10 @@
     .dl-nm { background: #2980b9; }
     .dl-mm { background: #8e44ad; }
     .dl-pt { background: #16a085; }
+    .dl-hs { background: #e67e22; }
+    .dl-dm { background: #2471a3; }
+    .dl-id { background: #c0392b; }
+    .dl-ct { background: #1e8449; }
 
     /* ── Map Legend ── */
     .map-legend {
@@ -197,6 +234,105 @@
       background: #f0f8f0;
       color: #27ae60;
       font-weight: 700;
+    }
+
+    /* ── Date filter bar ── */
+    .date-filter-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 0 12px;
+      border-bottom: 1px solid #eee;
+      margin-bottom: 10px;
+    }
+    .date-filter-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      white-space: nowrap;
+    }
+    .date-filter-bar input[type="date"] {
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    /* ── Summary tables ── */
+    .summary-block {
+      margin-bottom: 22px;
+    }
+    .summary-block-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .summary-block-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin: 0;
+      padding-bottom: 4px;
+      border-bottom: 2px solid #e8e8e8;
+      flex: 1;
+    }
+    .summary-dl-btn {
+      font-size: 11px;
+      padding: 3px 9px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      background: #16a085;
+      color: #fff;
+      font-weight: 600;
+      margin-left: 10px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .summary-dl-btn:hover { opacity: 0.82; }
+    .summary-section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #2c3e50;
+      padding: 8px 0 12px;
+      border-bottom: 3px solid #2980b9;
+      margin-bottom: 16px;
+    }
+    .summary-table-wrapper {
+      overflow-x: auto;
+    }
+    .summary-table {
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 400px;
+      width: 100%;
+    }
+    .summary-table th {
+      background: #f0f4f8;
+      padding: 7px 10px;
+      text-align: center;
+      font-weight: 600;
+      color: #444;
+      border: 1px solid #e0e0e0;
+      white-space: nowrap;
+    }
+    .summary-table th:first-child { text-align: left; }
+    .summary-table td {
+      padding: 6px 10px;
+      text-align: center;
+      border: 1px solid #ebebeb;
+      color: #333;
+    }
+    .summary-table td:first-child { text-align: left; font-size: 11px; }
+    .summary-table tbody tr:nth-child(even) { background: #fafafa; }
+    .summary-table tbody tr:hover { background: #eef4ff; }
+    .summary-total-row td {
+      background: #f0f4f8 !important;
+      border-top: 2px solid #d0d0d0;
     }
   </style>
 
