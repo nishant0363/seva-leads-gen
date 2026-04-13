@@ -197,7 +197,7 @@ const ADD_POINT_FIELDS = [
   { key: "App status",     label: "App Status",      type: "text"  },
   { key: "Lead Status",    label: "Lead Status",     type: "text"  },
   { key: "Final Status",   label: "Final Status",    type: "text"  },
-  { key: "location",       label: "Maps Link",       type: "url"   },
+  { key: "Location (Google Maps URL) / Map Code", label: "Maps Link / Plus Code", type: "url"   },
   { key: "Contact Name",   label: "Contact Name",    type: "text"  },
   { key: "Contact number", label: "Contact Number",  type: "tel"   },
   { key: "Comment",        label: "Comment",         type: "text"  },
@@ -554,54 +554,122 @@ function downloadLayerCSV(type) {
 }
 
 // ============================================================
-// URL RESOLUTION (unchanged)
+// URL RESOLUTION
 // ============================================================
-async function resolveGoogleMapsCoords(url) {
-  const directMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (directMatch) return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
+// The column header in the sheet that holds the Maps URL / Plus code / address
+const LOCATION_COL = "Location (Google Maps URL) / Map Code";
 
-  const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(url);
-  const res = await fetch(backendUrl);
-  if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
-  const text = await res.text();
+// Resolves any input — URL, Plus code, or address — via Apps Script smartResolve
+async function resolveCoords(input) {
+  if (!input || !input.toString().trim()) throw new Error("Empty input");
 
-  let expandedUrl = "";
-  let json = null;
-  try {
-    json = JSON.parse(text);
-    expandedUrl = json.url || json.expandedUrl || json.resolved || "";
-  } catch (e) {
-    expandedUrl = text.trim();
+  const raw = input.toString().trim();
+  console.log(`🔍 resolveCoords() — raw input: "${raw}"`);
+  console.log(`🔍 resolveCoords() — isURL: ${/^https?:\/\//i.test(raw)}, hasDirectCoords: ${/@-?\d+\.\d+,-?\d+\.\d+/.test(raw)}`);
+
+  // If it's a full Maps URL with coords already embedded, parse directly — saves a round trip
+  const directMatch = raw.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (directMatch) {
+    console.log(`✅ resolveCoords() — direct coords match: ${directMatch[1]}, ${directMatch[2]}`);
+    return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
   }
 
-  if (json && json.lat && json.lng) return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
+  // Everything else — short URLs, Plus codes, addresses — goes to Apps Script smartResolve
+  const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(raw);
+  console.log(`🌐 resolveCoords() — calling backend: ${backendUrl}`);
 
+  const res = await fetch(backendUrl);
+  console.log(`🌐 resolveCoords() — backend HTTP status: ${res.status}`);
+  if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
+
+  const text = await res.text();
+  console.log(`🌐 resolveCoords() — raw backend response: ${text}`);
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch(e) {
+    throw new Error(`Backend returned non-JSON: ${text}`);
+  }
+
+  console.log(`🌐 resolveCoords() — parsed response:`, json);
+
+  if (json.error) throw new Error(`Backend error: ${json.error}`);
+
+  // Backend returns { lat, lng } directly for Plus codes / geocoded addresses
+  if (json.lat != null && json.lng != null) {
+    console.log(`✅ resolveCoords() — got lat/lng from backend: ${json.lat}, ${json.lng}`);
+    return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
+  }
+
+  console.warn(`⚠️ resolveCoords() — no lat/lng in response, trying to parse from url field: "${json.url}"`);
+
+  // For URL expansions, backend may return just { url } — try parsing coords from it
+  const expandedUrl = json.url || "";
   const d3Match = expandedUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (d3Match) return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
+  if (d3Match) {
+    console.log(`✅ resolveCoords() — parsed !3d!4d coords: ${d3Match[1]}, ${d3Match[2]}`);
+    return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
+  }
 
-  const expandedMatch = expandedUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (expandedMatch) return { lat: parseFloat(expandedMatch[1]), lng: parseFloat(expandedMatch[2]) };
+  const atMatch = expandedUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (atMatch) {
+    console.log(`✅ resolveCoords() — parsed @lat,lng coords: ${atMatch[1]}, ${atMatch[2]}`);
+    return { lat: parseFloat(atMatch[1]), lng: parseFloat(atMatch[2]) };
+  }
 
-  throw new Error(`Could not extract coords from expanded URL: ${expandedUrl}`);
+  throw new Error(`Could not extract coords from: "${expandedUrl || raw}"`);
 }
 
 async function fillLatLong() {
   let updated = [], skippedCount = 0, failedCount = 0;
+
+  console.log(`🌍 fillLatLong() — starting, total rows: ${allData.length}`);
+  console.log(`🌍 fillLatLong() — looking for column: "${LOCATION_COL}"`);
+
+  // Log first row keys so we can verify column name matches exactly
+  if (allData.length > 0) {
+    const keys = Object.keys(allData[0]);
+    const locationKey = keys.find(k => k === LOCATION_COL);
+    console.log(`🌍 fillLatLong() — column match found: ${!!locationKey}`);
+    console.log(`🌍 fillLatLong() — all column keys:`, keys);
+  }
+
   for (let row of allData) {
-    if (!row.location) { skippedCount++; continue; }
+    const locationInput = row[LOCATION_COL];
+
+    // Skip rows with no location input at all
+    if (!locationInput || !locationInput.toString().trim()) {
+      console.log(`⏭️ _rowIndex:${row._rowIndex} — skipped (no location value), raw: ${JSON.stringify(locationInput)}`);
+      skippedCount++;
+      continue;
+    }
+
+    // Skip rows that already have valid non-zero coords
     const latOk = row.Lat && !isNaN(parseFloat(row.Lat)) && parseFloat(row.Lat) !== 0;
     const lngOk = row.Long && !isNaN(parseFloat(row.Long)) && parseFloat(row.Long) !== 0;
-    if (latOk && lngOk) { skippedCount++; continue; }
+    if (latOk && lngOk) {
+      console.log(`⏭️ _rowIndex:${row._rowIndex} — skipped (already has coords: ${row.Lat}, ${row.Long})`);
+      skippedCount++;
+      continue;
+    }
+
+    console.log(`🔄 _rowIndex:${row._rowIndex} — processing: "${locationInput}"`);
+
     try {
-      const coords = await resolveGoogleMapsCoords(row.location);
+      const coords = await resolveCoords(locationInput);
       row.Lat = coords.lat;
       row.Long = coords.lng;
       updated.push(row);
+      console.log(`✅ _rowIndex:${row._rowIndex} — resolved: ${coords.lat}, ${coords.lng}`);
     } catch (e) {
       failedCount++;
-      console.error(`❌ Row _rowIndex:${row._rowIndex} — failed:`, e.message);
+      console.error(`❌ _rowIndex:${row._rowIndex} — failed for "${locationInput}": ${e.message}`);
     }
   }
+
+  console.log(`🌍 fillLatLong() — done. Updated: ${updated.length}, Skipped: ${skippedCount}, Failed: ${failedCount}`);
+
   updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
   alert(`✅ Updated ${updated.length} rows\n⏭️ Skipped: ${skippedCount}\n❌ Failed: ${failedCount}`);
   if (updated.length > 0) loadData();
