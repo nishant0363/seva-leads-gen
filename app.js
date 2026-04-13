@@ -4,6 +4,11 @@ let allData = [];
 let hoods = [];
 let markers = [];
 let activeFilters = {};
+
+// ── Add-Point mode ──────────────────────────────────────────
+let addPointMode = false;
+let addPointMarker = null;   // temporary crosshair marker while picking
+
 console.log("🚀 App initializing...");
 init();
 
@@ -11,17 +16,12 @@ async function init() {
   console.log("🗺️ init() called");
 
   map = L.map('map').setView([12.9, 77.65], 12);
-  console.log("🗺️ Map created with default view [12.9, 77.65], zoom 12");
+  console.log("🗺️ Map created");
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
     .addTo(map);
-  console.log("🗺️ Tile layer added");
 
-  // ✅ FIX: force map resize
-  setTimeout(() => {
-    console.log("🔄 Forcing map invalidateSize()");
-    map.invalidateSize();
-  }, 300);
+  setTimeout(() => map.invalidateSize(), 300);
 
   console.log("📦 Fetching hoods.json...");
   hoods = await fetch("hoods.json").then(r => r.json());
@@ -31,449 +31,655 @@ async function init() {
 
   await loadData();
 
-  console.log("⏱️ Auto-refresh set for every 30 seconds");
   setInterval(loadData, 30000);
+
+  initMapSearch();
+
+  // ── Map-click handler for "Add Point" mode ──
+  map.on("click", function (e) {
+    if (!addPointMode) return;
+    const { lat, lng } = e.latlng;
+    console.log(`📍 Map clicked in Add-Point mode: [${lat}, ${lng}]`);
+    openAddPointModal(lat, lng);
+  });
 }
 
+// ============================================================
+// DATA LOADING
+// ============================================================
 async function loadData() {
   const url = CONFIG.API_URL + "?t=" + Date.now();
-  console.log("📡 loadData() called — fetching:", url);
-
+  console.log("📡 loadData() —", url);
   try {
     const res = await fetch(url);
-    console.log("📡 Response status:", res.status, res.statusText);
-
     const text = await res.text();
-    console.log("RAW RESPONSE:", text);
-
     const data = JSON.parse(text);
-    console.log(`✅ Parsed data — ${data.length} rows`);
-
     allData = data;
-    console.log("💾 allData updated with", allData.length, "rows");
+    console.log(`✅ ${allData.length} rows loaded`);
 
     if (Object.values(activeFilters).some(v => v)) {
-      console.log("🔽 Active filters detected — running filterAndRender()");
       filterAndRender();
     } else {
-      console.log("🔽 No active filters — running renderMarkers()");
       renderMarkers();
-    };
-
+    }
+    renderSheetPreview(allData);
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
   populateFilters();
 }
 
+// ============================================================
+// RENDER MARKERS
+// ============================================================
 function renderMarkers() {
-  console.log("📍 renderMarkers() called");
-
-  // ✅ CLEAR OLD MARKERS
-  console.log(`🧹 Clearing ${markers.length} existing markers`);
+  console.log("📍 renderMarkers()");
   markers.forEach(m => map.removeLayer(m));
   markers = [];
-
   let skipped = 0;
 
   allData.forEach((row, i) => {
     const lat = parseFloat(row.Lat);
     const lng = parseFloat(row.Long);
-
     if (!isNaN(lat) && !isNaN(lng)) {
-
-      // ✅ AUTO ASSIGN NM/MM
       if (!row.NM || !row.MM) {
-        console.log(`🔍 Row ${i} missing NM/MM — assigning hood for [${lat}, ${lng}]`);
         const hood = assignHood({ lat, lng });
-
         if (hood) {
           row.NM = hood.nano_market;
           row.MM = hood.micro_market;
           row["NM Id"] = hood.hood_id;
-          console.log(`✅ Row ${i} assigned NM: ${row.NM}, MM: ${row.MM}, Hood ID: ${row["NM Id"]}`);
-
-          // 🔥 KEY FIX: immediately save to backend
-          // renderMarkers() mutates the row in memory BEFORE fixMissingNM() runs,
-          // so fixMissingNM() sees NM/MM already filled and skips these rows (Updated: 0 bug).
-          // Solution: save right here, as soon as we assign.
-          if (!row["Sr. No"]) {
-            console.warn(`⚠️ Row ${i} — cannot auto-save, missing Sr. No`);
-          } else {
-            console.log(`📤 Auto-saving row ${i} (Sr. No: ${row["Sr. No"]}) to backend...`);
-            fetch(CONFIG.API_URL, {
-              method: "POST",
-              body: JSON.stringify(row)
-            })
-            .then(() => console.log(`✅ Auto-saved Sr. No: ${row["Sr. No"]} — NM: ${row.NM}, MM: ${row.MM}`))
-            .catch(err => console.error(`❌ Auto-save failed for Sr. No: ${row["Sr. No"]}`, err));
+          if (row["Sr. No"]) {
+            fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(row) })
+              .then(() => console.log(`✅ Auto-saved Sr. No: ${row["Sr. No"]}`))
+              .catch(err => console.error(`❌ Auto-save failed`, err));
           }
-        } else {
-          console.warn(`⚠️ Row ${i} — no hood found for [${lat}, ${lng}]`);
         }
       }
-
-      const marker = L.marker([lat, lng], {
-        icon: getCategoryIcon(row.Category)
-      })
+      const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
         .addTo(map)
-        .bindPopup(`
-          <b>${row.Name || "No Name"}</b><br>
-          ${row.Category || ""}<br>
-          NM: ${row.NM || "-"}<br>
-          MM: ${row.MM || "-"}
-        `)
+        .bindPopup(`<b>${row.Name || "No Name"}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
         .on('click', () => showDetails(row));
-
       markers.push(marker);
     } else {
       skipped++;
-      console.warn(`⚠️ Row ${i} skipped — invalid Lat/Long:`, row.Lat, row.Long);
     }
   });
-
-  console.log(`📍 renderMarkers() done — ${markers.length} markers added, ${skipped} rows skipped`);
+  console.log(`📍 ${markers.length} markers, ${skipped} skipped`);
 }
 
-function fixMissingNM() {
-  console.log("🔧 fixMissingNM() called");
+// ============================================================
+// FILTERS — only matching rows stay on map
+// ============================================================
+function applyFilters() {
+  console.log("🔽 applyFilters()");
+  activeFilters = {
+    Category:      document.getElementById("filterCategory").value,
+    Property:      document.getElementById("filterProperty").value,
+    "App status":  document.getElementById("filterAppStatus").value,
+    "Lead Status": document.getElementById("filterLeadStatus").value,
+    NM:            document.getElementById("filterNM").value,
+    MM:            document.getElementById("filterMM").value
+  };
+  console.log("🔽 Filters:", activeFilters);
+  filterAndRender();
+}
 
-  let updated = [];
+function filterAndRender() {
+  const filtered = allData.filter(row =>
+    Object.keys(activeFilters).every(key => !activeFilters[key] || row[key] === activeFilters[key])
+  );
+  console.log(`🔽 ${filtered.length}/${allData.length} rows match filters`);
+  renderFilteredMarkers(filtered);
+}
 
-  allData.forEach((row, i) => {
+function renderFilteredMarkers(data) {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  const bounds = [];
+
+  data.forEach((row, i) => {
     const lat = parseFloat(row.Lat);
     const lng = parseFloat(row.Long);
-
-    // 🔬 DEEP DIAGNOSTIC: log raw values and types for every row
-    console.log(
-      `🔬 Row ${i} | Sr.No: ${row["Sr. No"]} | Name: ${row.Name} | ` +
-      `Lat raw: ${JSON.stringify(row.Lat)} (${typeof row.Lat}) → parsed: ${lat} | ` +
-      `Long raw: ${JSON.stringify(row.Long)} (${typeof row.Long}) → parsed: ${lng} | ` +
-      `NM: ${JSON.stringify(row.NM)} | MM: ${JSON.stringify(row.MM)}`
-    );
-
-    if (isNaN(lat) || isNaN(lng)) {
-      console.warn(`⚠️ Row ${i} (Sr.No ${row["Sr. No"]}) SKIPPED — isNaN lat:${isNaN(lat)} lng:${isNaN(lng)}`);
-      return;
-    }
-
-    const nmEmpty = isEmpty(row.NM);
-    const mmEmpty = isEmpty(row.MM);
-    console.log(`🔬 Row ${i} isEmpty check — NM empty: ${nmEmpty}, MM empty: ${mmEmpty}`);
-
-    if (nmEmpty || mmEmpty) {
-      console.log(`🔍 Row ${i} has empty NM/MM — assigning hood for [${lat}, ${lng}]`);
-      const hood = assignHood({ lat, lng });
-
-      if (hood) {
-        row.NM = hood.nano_market;
-        row.MM = hood.micro_market;
-        row["NM Id"] = hood.hood_id;
-        console.log(`✅ Row ${i} updated — NM: ${row.NM}, MM: ${row.MM}, Hood ID: ${row["NM Id"]}`);
-        updated.push(row);
-      } else {
-        console.log("❌ No hood found for:", lat, lng);
-      }
+    if (!isNaN(lat) && !isNaN(lng)) {
+      const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
+        .addTo(map)
+        .bindPopup(`<b>${row.Name || "No Name"}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
+        .on('click', () => showDetails(row));
+      markers.push(marker);
+      bounds.push([lat, lng]);
     }
   });
 
-  console.log("Updated:", updated.length);
-
-  updated.forEach((r, i) => {
-    console.log(`📤 POSTing updated row ${i}:`, r["Sr. No"] || "(no Sr. No)");
-    fetch(CONFIG.API_URL, {
-      method: "POST",
-      body: JSON.stringify(r)
-    });
-  });
-
-  alert(`✅ Updated ${updated.length} rows`);
+  if (bounds.length) map.fitBounds(bounds);
+  console.log(`📍 renderFilteredMarkers: ${markers.length} markers`);
 }
 
-// Extracts lat/lng from a Google Maps URL (short or full).
-// Strategy:
-//   1. If already a full URL with @lat,lng — parse directly (no fetch needed)
-//   2. Otherwise — ask YOUR OWN Apps Script backend to resolve the short URL
-//      (avoids CORS issues entirely since Apps Script can fetch any URL server-side)
-async function resolveGoogleMapsCoords(url) {
-  console.log(`🔗 resolveGoogleMapsCoords() — resolving: ${url}`);
+function clearFilters() {
+  activeFilters = {};
+  document.querySelectorAll("select").forEach(s => s.value = "");
+  renderMarkers();
+}
 
-  // Strategy 1: full URL already has coords — parse directly, no network call needed
-  const directMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (directMatch) {
-    const result = { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
-    console.log(`✅ Strategy 1: parsed coords directly from URL:`, result);
-    return result;
+function populateFilters() {
+  const fields = [
+    { key: "Category",    id: "filterCategory"   },
+    { key: "Property",    id: "filterProperty"   },
+    { key: "App status",  id: "filterAppStatus"  },
+    { key: "Lead Status", id: "filterLeadStatus" },
+    { key: "NM",          id: "filterNM"         },
+    { key: "MM",          id: "filterMM"         }
+  ];
+  fields.forEach(f => {
+    const select = document.getElementById(f.id);
+    if (!select) return;
+    const current = select.value;
+    const values = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    select.innerHTML = `<option value="">${f.key}</option>` +
+      values.map(v => `<option value="${v}">${v}</option>`).join("");
+    select.value = current;
+  });
+}
+
+// ============================================================
+// FEATURE: ADD POINT BY CLICKING MAP
+// ============================================================
+
+// Fields shown in the Add-Point modal — Lat/Long auto-filled & locked; Sr. No required; rest optional
+const ADD_POINT_FIELDS = [
+  { key: "Sr. No",         label: "Sr. No *",       type: "number", required: true  },
+  { key: "Name",           label: "Name",            type: "text"  },
+  { key: "Category",       label: "Category",        type: "text"  },
+  { key: "Sub Category",   label: "Sub Category",    type: "text"  },
+  { key: "Road",           label: "Road",            type: "text"  },
+  { key: "Property",       label: "Property",        type: "text"  },
+  { key: "App status",     label: "App Status",      type: "text"  },
+  { key: "Lead Status",    label: "Lead Status",     type: "text"  },
+  { key: "Final Status",   label: "Final Status",    type: "text"  },
+  { key: "location",       label: "Maps Link",       type: "url"   },
+  { key: "Contact Name",   label: "Contact Name",    type: "text"  },
+  { key: "Contact number", label: "Contact Number",  type: "tel"   },
+  { key: "Comment",        label: "Comment",         type: "text"  },
+  { key: "Restroom ID",    label: "Restroom ID",     type: "text"  },
+];
+
+function toggleAddPointMode() {
+  addPointMode = !addPointMode;
+  const btn = document.getElementById("btnAddPoint");
+  if (addPointMode) {
+    btn.textContent = "❌ Cancel Add Point";
+    btn.style.background = "#c0392b";
+    map.getContainer().style.cursor = "crosshair";
+    console.log("📍 Add-Point mode ON — click map to place");
+  } else {
+    btn.textContent = "➕ Add Point";
+    btn.style.background = "";
+    map.getContainer().style.cursor = "";
+    // remove temporary marker if any
+    if (addPointMarker) { map.removeLayer(addPointMarker); addPointMarker = null; }
+    console.log("📍 Add-Point mode OFF");
+  }
+}
+
+function openAddPointModal(lat, lng) {
+  // place a temporary crosshair marker
+  if (addPointMarker) map.removeLayer(addPointMarker);
+  addPointMarker = L.marker([lat, lng], {
+    icon: L.divIcon({ className: "custom-icon", html: `<div style="font-size:24px">📌</div>` })
+  }).addTo(map);
+
+  const container = document.getElementById("addPointFields");
+  if (!container) {
+    console.error("❌ #addPointFields not found in DOM");
+    return;
   }
 
-  // Strategy 2: short URL — ask Apps Script backend to expand it
-  // Apps Script can fetch any URL server-side without CORS restrictions.
-  // Your backend needs to handle action=resolveUrl (see Apps Script snippet below).
-  const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(url);
-  console.log(`🌐 Strategy 2: asking Apps Script to resolve short URL: ${backendUrl}`);
+  container.innerHTML = `
+    <!-- Lat/Long shown but locked -->
+    <div class="modal-field">
+      <label>Lat (auto)</label>
+      <input type="number" id="ap_Lat" value="${lat.toFixed(7)}" readonly style="background:#f0f0f0" />
+    </div>
+    <div class="modal-field">
+      <label>Long (auto)</label>
+      <input type="number" id="ap_Long" value="${lng.toFixed(7)}" readonly style="background:#f0f0f0" />
+    </div>
+  ` + ADD_POINT_FIELDS.map(f => `
+    <div class="modal-field">
+      <label>${f.label}</label>
+      <input type="${f.type}" id="ap_${f.key.replace(/[\s.]/g,'_')}"
+             placeholder="${f.label}${f.required ? '' : ' (optional)'}" />
+    </div>
+  `).join("");
 
+  document.getElementById("addPointModal").style.display = "flex";
+}
+
+function closeAddPointModal() {
+  document.getElementById("addPointModal").style.display = "none";
+  if (addPointMarker) { map.removeLayer(addPointMarker); addPointMarker = null; }
+  // turn off add-point mode after placing
+  if (addPointMode) toggleAddPointMode();
+}
+
+async function submitAddPoint() {
+  const lat = document.getElementById("ap_Lat").value;
+  const lng = document.getElementById("ap_Long").value;
+  const srNo = document.getElementById("ap_Sr__No").value.trim();
+
+  if (!srNo) { alert("❌ Sr. No is required"); return; }
+
+  const newRow = {
+    "Lat":  parseFloat(lat),
+    "Long": parseFloat(lng),
+    "Sr. No": parseFloat(srNo)
+  };
+
+  // collect optional fields
+  ADD_POINT_FIELDS.forEach(f => {
+    if (f.key === "Sr. No") return; // already added
+    const el = document.getElementById("ap_" + f.key.replace(/[\s.]/g,'_'));
+    if (el && el.value.trim()) {
+      newRow[f.key] = f.type === "number" ? parseFloat(el.value) : el.value.trim();
+    }
+  });
+
+  // auto-assign NM/MM
+  const hood = assignHood({ lat: parseFloat(lat), lng: parseFloat(lng) });
+  if (hood) {
+    newRow.NM = hood.nano_market;
+    newRow.MM = hood.micro_market;
+    newRow["NM Id"] = hood.hood_id;
+    console.log(`✅ Auto-assigned NM: ${newRow.NM}, MM: ${newRow.MM}`);
+  }
+
+  console.log("📤 Submitting new point:", newRow);
+
+  try {
+    const res = await fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(newRow) });
+    const txt = await res.text();
+    const json = JSON.parse(txt);
+    if (json.success) {
+      alert(`✅ Point added — Sr. No: ${srNo}\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}`);
+      closeAddPointModal();
+      loadData();
+    } else {
+      alert("❌ Failed: " + txt);
+    }
+  } catch (err) {
+    console.error("❌ submitAddPoint failed:", err);
+    alert("❌ Error: " + err.message);
+  }
+}
+
+// ============================================================
+// FEATURE: DOWNLOAD KML / CSV (WKT) — filtered output only
+// ============================================================
+
+/** Returns the currently-filtered dataset (or all data if no filters active) */
+function getFilteredData() {
+  const hasFilter = Object.values(activeFilters).some(v => v);
+  if (!hasFilter) return allData;
+  return allData.filter(row =>
+    Object.keys(activeFilters).every(key => !activeFilters[key] || row[key] === activeFilters[key])
+  );
+}
+
+/** Returns unique NM values present in filtered data */
+function getFilteredNMs() {
+  const data = getFilteredData();
+  return [...new Set(data.map(r => r.NM).filter(Boolean))];
+}
+
+/** Returns unique MM values present in filtered data */
+function getFilteredMMs() {
+  const data = getFilteredData();
+  return [...new Set(data.map(r => r.MM).filter(Boolean))];
+}
+
+/** Returns hood objects matching a list of NM names */
+function hoodsByNM(nmList) {
+  return hoods.filter(h => nmList.includes(h.nano_market));
+}
+
+/** Returns hood objects matching a list of MM names */
+function hoodsByMM(mmList) {
+  return hoods.filter(h => mmList.includes(h.micro_market));
+}
+
+// ── KML helpers ─────────────────────────────────────────────
+
+function geojsonCoordToKmlRing(coords) {
+  // coords: array of [lng, lat] pairs
+  return coords.map(c => `${c[0]},${c[1]},0`).join(" ");
+}
+
+function geometryToKmlGeometry(geometry) {
+  if (!geometry) return "";
+  if (geometry.type === "Polygon") {
+    const outer = geometry.coordinates[0];
+    const inner = geometry.coordinates.slice(1);
+    return `<Polygon>
+      <outerBoundaryIs><LinearRing><coordinates>${geojsonCoordToKmlRing(outer)}</coordinates></LinearRing></outerBoundaryIs>
+      ${inner.map(r => `<innerBoundaryIs><LinearRing><coordinates>${geojsonCoordToKmlRing(r)}</coordinates></LinearRing></innerBoundaryIs>`).join("")}
+    </Polygon>`;
+  }
+  if (geometry.type === "MultiPolygon") {
+    return `<MultiGeometry>${geometry.coordinates.map(poly => {
+      const outer = poly[0];
+      const inner = poly.slice(1);
+      return `<Polygon>
+        <outerBoundaryIs><LinearRing><coordinates>${geojsonCoordToKmlRing(outer)}</coordinates></LinearRing></outerBoundaryIs>
+        ${inner.map(r => `<innerBoundaryIs><LinearRing><coordinates>${geojsonCoordToKmlRing(r)}</coordinates></LinearRing></innerBoundaryIs>`).join("")}
+      </Polygon>`;
+    }).join("")}</MultiGeometry>`;
+  }
+  return "";
+}
+
+function hoodsToKml(hoodList, layerName, color = "7f0000ff") {
+  const placemarks = hoodList.map(h => `
+  <Placemark>
+    <name>${escXml(h.nano_market || h.micro_market || h.hood_id)}</name>
+    <description><![CDATA[NM: ${h.nano_market || ""}<br>MM: ${h.micro_market || ""}<br>ID: ${h.hood_id || ""}]]></description>
+    <Style><PolyStyle><color>${color}</color><outline>1</outline></PolyStyle></Style>
+    ${geometryToKmlGeometry(h.geometry)}
+  </Placemark>`).join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>${escXml(layerName)}</name>
+${placemarks}
+</Document>
+</kml>`;
+}
+
+function pointsToKml(data, layerName) {
+  const placemarks = data
+    .filter(row => !isNaN(parseFloat(row.Lat)) && !isNaN(parseFloat(row.Long)))
+    .map(row => `
+  <Placemark>
+    <name>${escXml(row.Name || "Point " + row["Sr. No"])}</name>
+    <description><![CDATA[
+      Sr. No: ${row["Sr. No"] || ""}<br>
+      Category: ${row.Category || ""}<br>
+      NM: ${row.NM || ""}<br>
+      MM: ${row.MM || ""}<br>
+      Road: ${row.Road || ""}<br>
+      Status: ${row["Final Status"] || ""}
+    ]]></description>
+    <Point><coordinates>${parseFloat(row.Long)},${parseFloat(row.Lat)},0</coordinates></Point>
+  </Placemark>`).join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>${escXml(layerName)}</name>
+${placemarks}
+</Document>
+</kml>`;
+}
+
+function escXml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// ── WKT CSV helpers ──────────────────────────────────────────
+
+function coordsToWktPolygon(coordinates) {
+  if (!coordinates || !coordinates.length) return "";
+  const ring = coordinates[0].map(c => `${c[0]} ${c[1]}`).join(", ");
+  return `POLYGON((${ring}))`;
+}
+
+function geometryToWkt(geometry) {
+  if (!geometry) return "";
+  if (geometry.type === "Polygon") return coordsToWktPolygon(geometry.coordinates);
+  if (geometry.type === "MultiPolygon") {
+    const parts = geometry.coordinates.map(poly => {
+      const ring = poly[0].map(c => `${c[0]} ${c[1]}`).join(", ");
+      return `((${ring}))`;
+    });
+    return `MULTIPOLYGON(${parts.join(", ")})`;
+  }
+  return "";
+}
+
+function hoodsToCsvWkt(hoodList, nameField) {
+  const headers = ["WKT", "name", "nm", "mm", "hood_id"];
+  const rows = hoodList.map(h => [
+    `"${geometryToWkt(h.geometry)}"`,
+    `"${h[nameField] || h.nano_market || h.micro_market || ""}"`,
+    `"${h.nano_market || ""}"`,
+    `"${h.micro_market || ""}"`,
+    `"${h.hood_id || ""}"`
+  ].join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function pointsToCsvWkt(data) {
+  const headers = ["WKT", "sr_no", "name", "category", "nm", "mm", "road", "final_status", "lat", "long"];
+  const rows = data
+    .filter(row => !isNaN(parseFloat(row.Lat)) && !isNaN(parseFloat(row.Long)))
+    .map(row => {
+      const lat = parseFloat(row.Lat);
+      const lng = parseFloat(row.Long);
+      return [
+        `"POINT(${lng} ${lat})"`,
+        `"${row["Sr. No"] || ""}"`,
+        `"${(row.Name || "").replace(/"/g,'""')}"`,
+        `"${row.Category || ""}"`,
+        `"${row.NM || ""}"`,
+        `"${row.MM || ""}"`,
+        `"${(row.Road || "").replace(/"/g,'""')}"`,
+        `"${row["Final Status"] || ""}"`,
+        lat,
+        lng
+      ].join(",");
+    });
+  return [headers.join(","), ...rows].join("\n");
+}
+
+// ── Download trigger ─────────────────────────────────────────
+
+function downloadBlob(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadLayerKML(type) {
+  const filteredData = getFilteredData();
+  const label = activeFilters.NM || activeFilters.MM || "filtered";
+
+  if (type === "nm") {
+    const nmList = getFilteredNMs();
+    const hoodList = hoodsByNM(nmList);
+    if (!hoodList.length) { alert("No NM hoods found for current filter."); return; }
+    downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+    console.log(`📥 NM KML downloaded — ${hoodList.length} hoods`);
+
+  } else if (type === "mm") {
+    const mmList = getFilteredMMs();
+    // de-duplicate: one polygon per MM (merge by first match)
+    const seen = new Set();
+    const hoodList = hoods.filter(h => {
+      if (!mmList.includes(h.micro_market)) return false;
+      if (seen.has(h.micro_market)) return false;
+      seen.add(h.micro_market);
+      return true;
+    });
+    if (!hoodList.length) { alert("No MM hoods found for current filter."); return; }
+    downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+    console.log(`📥 MM KML downloaded — ${hoodList.length} hoods`);
+
+  } else if (type === "points") {
+    if (!filteredData.length) { alert("No data points to export."); return; }
+    downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
+    console.log(`📥 Points KML downloaded — ${filteredData.length} rows`);
+  }
+}
+
+function downloadLayerCSV(type) {
+  const filteredData = getFilteredData();
+  const label = activeFilters.NM || activeFilters.MM || "filtered";
+
+  if (type === "nm") {
+    const hoodList = hoodsByNM(getFilteredNMs());
+    if (!hoodList.length) { alert("No NM hoods found for current filter."); return; }
+    downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
+    console.log(`📥 NM CSV (WKT) downloaded — ${hoodList.length} hoods`);
+
+  } else if (type === "mm") {
+    const mmList = getFilteredMMs();
+    const seen = new Set();
+    const hoodList = hoods.filter(h => {
+      if (!mmList.includes(h.micro_market) || seen.has(h.micro_market)) return false;
+      seen.add(h.micro_market);
+      return true;
+    });
+    if (!hoodList.length) { alert("No MM hoods found for current filter."); return; }
+    downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
+    console.log(`📥 MM CSV (WKT) downloaded — ${hoodList.length} hoods`);
+
+  } else if (type === "points") {
+    if (!filteredData.length) { alert("No data points to export."); return; }
+    downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
+    console.log(`📥 Points CSV (WKT) downloaded — ${filteredData.length} rows`);
+  }
+}
+
+// ============================================================
+// URL RESOLUTION (unchanged)
+// ============================================================
+async function resolveGoogleMapsCoords(url) {
+  const directMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (directMatch) return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
+
+  const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(url);
   const res = await fetch(backendUrl);
   if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
-
   const text = await res.text();
-  console.log(`🔗 Apps Script returned: ${text}`);
 
   let expandedUrl = "";
   let json = null;
   try {
     json = JSON.parse(text);
     expandedUrl = json.url || json.expandedUrl || json.resolved || "";
-    console.log(`🔗 Expanded URL from backend: ${expandedUrl}`);
   } catch (e) {
     expandedUrl = text.trim();
-    console.log(`🔗 Expanded URL (plain text): ${expandedUrl}`);
   }
 
-  // Best case: backend already parsed coords from HTML body
-  if (json && json.lat && json.lng) {
-    const result = { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
-    console.log(`✅ Strategy 2: backend returned coords directly:`, result);
-    return result;
-  }
+  if (json && json.lat && json.lng) return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
 
-  // Priority 1: !3d{lat}!4d{lng} — this is the ACTUAL PIN location, most accurate
-  // The @lat,lng in the URL is just the map viewport center, which can be offset
   const d3Match = expandedUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (d3Match) {
-    const result = { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
-    console.log(`✅ Strategy 2: parsed PIN coords from !3d!4d (accurate):`, result);
-    return result;
-  }
+  if (d3Match) return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
 
-  // Fallback: @lat,lng — map viewport center, less accurate (up to ~300m off)
   const expandedMatch = expandedUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (expandedMatch) {
-    const result = { lat: parseFloat(expandedMatch[1]), lng: parseFloat(expandedMatch[2]) };
-    console.warn(`⚠️ Strategy 2 fallback: using viewport coords @lat,lng (may be ~300m off):`, result);
-    return result;
-  }
+  if (expandedMatch) return { lat: parseFloat(expandedMatch[1]), lng: parseFloat(expandedMatch[2]) };
 
   throw new Error(`Could not extract coords from expanded URL: ${expandedUrl}`);
 }
 
-/*
-  ============================================================
-  ADD THIS TO YOUR GOOGLE APPS SCRIPT (Code.gs / doGet):
-  ============================================================
-
-  In your doGet(e) function, add this case:
-
-    if (e.parameter.action === "resolveUrl") {
-      const shortUrl = e.parameter.url;
-      try {
-        // UrlFetchApp follows redirects by default — this gives us the final URL
-        const response = UrlFetchApp.fetch(shortUrl, {
-          followRedirects: true,
-          muteHttpExceptions: true
-        });
-        const finalUrl = response.getHeaders()["Location"] || response.getContentText().match(/href="([^"]+)"/)?.[1] || shortUrl;
-        return ContentService
-          .createTextOutput(JSON.stringify({ url: finalUrl }))
-          .setMimeType(ContentService.MimeType.JSON);
-      } catch(err) {
-        return ContentService
-          .createTextOutput(JSON.stringify({ error: err.toString() }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
-    }
-
-  ============================================================
-*/
-
 async function fillLatLong() {
-  console.log("📍 fillLatLong() called");
-
-  let updated = [];
-  let skippedCount = 0;
-  let failedCount = 0;
-
+  let updated = [], skippedCount = 0, failedCount = 0;
   for (let row of allData) {
-
-    // Skip if no location link at all
-    if (!row.location) {
-      console.log(`⏭️ Row Sr.No ${row["Sr. No"]} — no location link, skipping`);
-      skippedCount++;
-      continue;
-    }
-
-    // Skip only if BOTH Lat and Long are already valid non-zero numbers
+    if (!row.location) { skippedCount++; continue; }
     const latOk = row.Lat && !isNaN(parseFloat(row.Lat)) && parseFloat(row.Lat) !== 0;
     const lngOk = row.Long && !isNaN(parseFloat(row.Long)) && parseFloat(row.Long) !== 0;
-
-    if (latOk && lngOk) {
-      console.log(`⏭️ Row Sr.No ${row["Sr. No"]} — already has valid Lat/Long (${row.Lat}, ${row.Long}), skipping`);
-      skippedCount++;
-      continue;
-    }
-
-    console.log(`🌐 Row Sr.No ${row["Sr. No"]} — missing coords, resolving: "${row.location}"`);
-
+    if (latOk && lngOk) { skippedCount++; continue; }
     try {
       const coords = await resolveGoogleMapsCoords(row.location);
-      console.log(`✅ Row Sr.No ${row["Sr. No"]} — got coords: Lat ${coords.lat}, Long ${coords.lng}`);
-
       row.Lat = coords.lat;
       row.Long = coords.lng;
-
       updated.push(row);
-
     } catch (e) {
       failedCount++;
-      console.error(`❌ Row Sr.No ${row["Sr. No"]} — failed to resolve "${row.location}":`, e.message);
+      console.error(`❌ Row Sr.No ${row["Sr. No"]} — failed:`, e.message);
     }
   }
-
-  console.log(`📊 fillLatLong() summary — updated: ${updated.length}, skipped: ${skippedCount}, failed: ${failedCount}`);
-  console.log(`📤 POSTing ${updated.length} updated rows`);
-
-  updated.forEach((r, i) => {
-    console.log(`📤 Posting row ${i} (Sr.No: ${r["Sr. No"]}) — Lat: ${r.Lat}, Long: ${r.Long}`);
-    console.log(`📤 Full payload:`, JSON.stringify(r));
-    fetch(CONFIG.API_URL, {
-      method: "POST",
-      body: JSON.stringify(r)
-    })
-    .then(res => res.text())
-    .then(txt => {
-      console.log(`📥 POST response for Sr.No ${r["Sr. No"]}:`, txt);
-      try {
-        const json = JSON.parse(txt);
-        if (json.success) console.log(`✅ Saved Sr.No: ${r["Sr. No"]}`);
-        else console.error(`❌ Backend rejected Sr.No ${r["Sr. No"]}:`, txt);
-      } catch(e) {
-        console.warn(`⚠️ Non-JSON response for Sr.No ${r["Sr. No"]}:`, txt);
-      }
-    })
-    .catch(err => console.error(`❌ Save failed for Sr.No: ${r["Sr. No"]}`, err));
-  });
-
+  updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
   alert(`✅ Updated ${updated.length} rows\n⏭️ Skipped: ${skippedCount}\n❌ Failed: ${failedCount}`);
-
-  // Reload fresh data so allData reflects what's now in the sheet
-  // (prevents stale in-memory rows showing as "missing coords" on next run)
-  if (updated.length > 0) {
-    console.log("🔄 Reloading data to sync allData with sheet...");
-    loadData();
-  }
+  if (updated.length > 0) loadData();
 }
 
-function applyFilters() {
-  console.log("🔽 applyFilters() called");
-
-  activeFilters = {
-    Category: document.getElementById("filterCategory").value,
-    Property: document.getElementById("filterProperty").value,
-    "App status": document.getElementById("filterAppStatus").value,
-    "Lead Status": document.getElementById("filterLeadStatus").value,
-    NM: document.getElementById("filterNM").value,
-    MM: document.getElementById("filterMM").value
-  };
-
-  console.log("🔽 Active filters:", activeFilters);
-
-  filterAndRender();
-}
-
-function filterAndRender() {
-  console.log("🔽 filterAndRender() called");
-
-  const filtered = allData.filter(row => {
-    return Object.keys(activeFilters).every(key => {
-      if (!activeFilters[key]) return true;
-      return row[key] === activeFilters[key];
-    });
-  });
-
-  console.log(`🔽 Filter result: ${filtered.length} / ${allData.length} rows match`);
-
-  renderFilteredMarkers(filtered);
-}
-
-function renderFilteredMarkers(data) {
-  console.log(`📍 renderFilteredMarkers() called with ${data.length} rows`);
-
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
-
-  const bounds = [];
-  let skipped = 0;
-
-  data.forEach((row, i) => {
+// ============================================================
+// FIX MISSING NM
+// ============================================================
+function fixMissingNM() {
+  let updated = [];
+  allData.forEach((row, i) => {
     const lat = parseFloat(row.Lat);
     const lng = parseFloat(row.Long);
-
-    if (!isNaN(lat) && !isNaN(lng)) {
-      const marker = L.marker([lat, lng], {
-        icon: getCategoryIcon(row.Category)
-      })
-        .addTo(map)
-        .on('click', () => showDetails(row));
-
-      markers.push(marker);
-      bounds.push([lat, lng]);
-    } else {
-      skipped++;
-      console.warn(`⚠️ Row ${i} skipped — invalid Lat/Long:`, row.Lat, row.Long);
+    if (isNaN(lat) || isNaN(lng)) return;
+    if (isEmpty(row.NM) || isEmpty(row.MM)) {
+      const hood = assignHood({ lat, lng });
+      if (hood) {
+        row.NM = hood.nano_market;
+        row.MM = hood.micro_market;
+        row["NM Id"] = hood.hood_id;
+        updated.push(row);
+      }
     }
   });
-
-  console.log(`📍 renderFilteredMarkers() done — ${markers.length} markers, ${skipped} skipped`);
-
-  if (bounds.length) {
-    console.log("🗺️ Fitting map to bounds:", bounds.length, "points");
-    map.fitBounds(bounds);
-  } else {
-    console.warn("⚠️ No valid bounds — map not adjusted");
-  }
+  updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
+  alert(`✅ Updated ${updated.length} rows`);
 }
 
-function clearFilters() {
-  console.log("🧹 clearFilters() called — resetting all filters");
-
-  activeFilters = {};
-
-  document.querySelectorAll("select").forEach(s => s.value = "");
-
-  console.log("🧹 All dropdowns reset");
-
-  renderMarkers();
-}
-
-function getCategoryIcon(category) {
-  console.log(`🎨 getCategoryIcon() called for category: "${category}"`);
-
-  const icons = {
-    shop: "📍",
-    apartment: "📍",
-    bus_stop: "📍",
-    park: "📍",
-    pg: "📍",
-    restaurant: "📍"
-  };
-
-  const emoji = icons[category?.toLowerCase()] || "📍";
-  console.log(`🎨 Icon resolved: "${emoji}" for category: "${category}"`);
-
-  return L.divIcon({
-    className: "custom-icon",
-    html: `<div style="font-size:18px">${emoji}</div>`
+// ============================================================
+// HOOD / GEOMETRY UTILITIES
+// ============================================================
+function drawHoods() {
+  hoods.forEach(h => {
+    if (!h.geometry) return;
+    const layer = L.geoJSON(h.geometry, {
+      style: { color: "blue", weight: 1, fillColor: "#4da6ff", fillOpacity: 0.15 }
+    }).addTo(map);
+    layer.on("click", () => {
+      layer.setStyle({ fillColor: "orange", fillOpacity: 0.4 });
+      showHoodDetails(h);
+    });
   });
+}
+
+function assignHood(coords) {
+  const pt = turf.point([coords.lng, coords.lat]);
+  let nearest = null, minDist = Infinity;
+  for (let h of hoods) {
+    const polygon = { type: "Feature", geometry: h.geometry };
+    try {
+      if (turf.booleanPointInPolygon(pt, polygon)) return h;
+      const center = turf.centroid(polygon);
+      const dist = turf.distance(pt, center);
+      if (dist < minDist) { minDist = dist; nearest = h; }
+    } catch (e) {}
+  }
+  return nearest;
 }
 
 function isEmpty(val) {
-  const result = !val || val.toString().trim() === "" || val === "NA";
-  console.log(`🔍 isEmpty("${val}") → ${result}`);
-  return result;
+  return !val || val.toString().trim() === "" || val === "NA";
 }
 
-function showHoodDetails(h) {
-  console.log("🏘️ showHoodDetails() called for hood:", h.nano_market, "|", h.micro_market, "| ID:", h.hood_id);
+function getCategoryIcon(category) {
+  return L.divIcon({
+    className: "custom-icon",
+    html: `<div style="font-size:18px">📍</div>`
+  });
+}
 
+// ============================================================
+// DETAILS + SAVE
+// ============================================================
+function showHoodDetails(h) {
   const table = document.getElementById("detailsTable");
   table.innerHTML = `
     <tr><td><b>NM</b></td><td>${h.nano_market}</td></tr>
@@ -483,184 +689,106 @@ function showHoodDetails(h) {
   `;
 }
 
-function populateFilters() {
-  console.log("🔽 populateFilters() called");
-
-  const fields = [
-    { key: "Category", label: "Category" },
-    { key: "Property", label: "Property" },
-    { key: "App status", label: "App Status" },
-    { key: "Lead Status", label: "Lead Status" },
-    { key: "NM", label: "NM" },
-    { key: "MM", label: "MM" }
-  ];
-
-  fields.forEach(f => {
-    const id = "filter" + f.key.replace(/ /g, "");
-    const select = document.getElementById(id);
-
-    if (!select) {
-      console.warn(`⚠️ populateFilters: element #${id} not found in DOM`);
-      return;
-    }
-
-    const values = [...new Set(allData.map(r => r[f.key]).filter(Boolean))];
-    console.log(`🔽 Filter "${f.key}" — ${values.length} unique values:`, values);
-
-    // preserve current selection
-    const currentValue = select.value;
-
-    select.innerHTML =
-      `<option value="">${f.label}</option>` +
-      values.map(v => `<option value="${v}">${v}</option>`).join("");
-
-    // restore selection
-    select.value = currentValue;
-    console.log(`🔽 Filter "${f.key}" restored to: "${currentValue}"`);
-  });
-}
-
-function drawHoods() {
-  console.log(`🗺️ drawHoods() called — drawing ${hoods.length} hoods`);
-
-  hoods.forEach((h, i) => {
-    if (!h.geometry) {
-      console.warn(`⚠️ Hood ${i} skipped — no geometry`);
-      return;
-    }
-
-    const layer = L.geoJSON(h.geometry, {
-      style: {
-        color: "blue",
-        weight: 1,
-        fillColor: "#4da6ff",
-        fillOpacity: 0.15
-      }
-    }).addTo(map);
-
-    console.log(`🗺️ Hood drawn: ${h.nano_market} (${h.hood_id})`);
-
-    // ✅ CLICK ON NM
-    layer.on("click", () => {
-      console.log(`🖱️ Hood clicked: ${h.nano_market} | ${h.micro_market} | ID: ${h.hood_id}`);
-
-      // highlight
-      layer.setStyle({
-        fillColor: "orange",
-        fillOpacity: 0.4
-      });
-
-      showHoodDetails(h);
-    });
-  });
-
-  console.log("🗺️ drawHoods() complete");
-}
-
-function assignHood(coords) {
-  console.log(`📌 assignHood() called for coords:`, coords);
-
-  const pt = turf.point([coords.lng, coords.lat]);
-
-  let nearest = null;
-  let minDist = Infinity;
-
-  for (let h of hoods) {
-    const polygon = {
-      type: "Feature",
-      geometry: h.geometry
-    };
-
-    try {
-      if (turf.booleanPointInPolygon(pt, polygon)) {
-        console.log(`✅ assignHood() — point inside hood: ${h.nano_market} (${h.hood_id})`);
-        return h;
-      }
-
-      // fallback: nearest
-      const center = turf.centroid(polygon);
-      const dist = turf.distance(pt, center);
-
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = h;
-      }
-
-    } catch (e) {
-      console.warn(`⚠️ assignHood() error for hood ${h.hood_id}:`, e.message);
-    }
-  }
-
-  console.log(`📌 assignHood() fallback — nearest hood: ${nearest?.nano_market} (${nearest?.hood_id}), dist: ${minDist.toFixed(3)} km`);
-  return nearest; // 🔥 fallback
-}
-
 function showDetails(row) {
-  console.log("📋 showDetails() called for row:", row["Sr. No"] || "(no Sr. No)", "|", row.Name || "(no name)");
-  console.log("📋 Full row data:", row);
-
   currentRow = row;
-
   const table = document.getElementById("detailsTable");
   table.innerHTML = "";
-
   Object.keys(row).forEach(key => {
-    table.innerHTML += `
-      <tr>
-        <td>${key}</td>
-        <td contenteditable="true" data-key="${key}">
-          ${row[key] || ""}
-        </td>
-      </tr>
-    `;
+    table.innerHTML += `<tr><td>${key}</td><td contenteditable="true" data-key="${key}">${row[key] || ""}</td></tr>`;
   });
-
-  console.log(`📋 Details table populated with ${Object.keys(row).length} fields`);
 }
 
 function saveCurrent() {
-  console.log("💾 saveCurrent() called");
-
-  if (!currentRow) {
-    console.warn("⚠️ saveCurrent() — no currentRow selected");
-    return;
-  }
-
-  console.log("💾 Reading editable cells...");
+  if (!currentRow) return;
   document.querySelectorAll("[contenteditable]").forEach(cell => {
-    const key = cell.dataset.key;
-    const oldVal = currentRow[key];
-    currentRow[key] = cell.innerText;
-    if (oldVal !== cell.innerText) {
-      console.log(`✏️ Field "${key}" changed: "${oldVal}" → "${cell.innerText}"`);
-    }
+    currentRow[cell.dataset.key] = cell.innerText;
   });
+  if (!currentRow["Sr. No"]) { alert("❌ Missing Sr. No"); return; }
+  fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
+    .then(() => alert("✅ Saved"))
+    .catch(err => alert("❌ Save failed: " + err.message));
+}
 
-  // ✅ ensure identifier is sent
-  if (!currentRow["Sr. No"]) {
-    console.error("❌ saveCurrent() — missing Sr. No, aborting save");
-    alert("❌ Missing Sr. No — cannot update row");
-    return;
-  }
-
-  console.log(`📤 POSTing row Sr. No: ${currentRow["Sr. No"]} to:`, CONFIG.API_URL);
-  console.log("📤 Payload:", currentRow);
-
-  fetch(CONFIG.API_URL, {
-    method: "POST",
-    body: JSON.stringify(currentRow)
-  })
-  .then(() => {
-    console.log("✅ saveCurrent() — save successful");
-    alert("✅ Saved");
-  })
-  .catch((err) => {
-    console.error("❌ saveCurrent() — save failed:", err);
-    alert("❌ Save failed");
+// ============================================================
+// SHEET PREVIEW
+// ============================================================
+function renderSheetPreview(data) {
+  const table = document.getElementById("sheetPreviewTable");
+  const countEl = document.getElementById("sheetRowCount");
+  if (!data.length) { table.innerHTML = "<tr><td>No data</td></tr>"; return; }
+  countEl.textContent = `${data.length} rows`;
+  const previewCols = ["Sr. No", "Name", "Category", "NM", "MM", "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
+  const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
+  table.innerHTML =
+    `<thead><tr>${availableCols.map(c => `<th>${c}</th>`).join("")}</tr></thead>` +
+    `<tbody>${data.map((row, idx) => `
+      <tr data-idx="${idx}" style="cursor:pointer">
+        ${availableCols.map(c => `<td title="${String(row[c]||'').replace(/"/g,'&quot;')}">${row[c]||""}</td>`).join("")}
+      </tr>`).join("")}</tbody>`;
+  table.querySelectorAll("tbody tr").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const idx = parseInt(tr.dataset.idx);
+      showDetails(data[idx]);
+      table.querySelectorAll("tbody tr").forEach(r => r.classList.remove("active-row"));
+      tr.classList.add("active-row");
+      document.querySelector(".details-card").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   });
 }
 
-function refreshData() {
-  console.log("🔄 refreshData() called — triggering loadData()");
-  loadData(); // ✅ better than reload
+function refreshData() { loadData(); }
+
+// ============================================================
+// MAP SEARCH (unchanged)
+// ============================================================
+let searchMarker = null;
+let searchDebounceTimer = null;
+
+function initMapSearch() {
+  const input = document.getElementById("mapSearchInput");
+  const results = document.getElementById("mapSearchResults");
+  input.addEventListener("input", () => {
+    clearTimeout(searchDebounceTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { results.classList.remove("open"); return; }
+    searchDebounceTimer = setTimeout(() => searchLocation(q), 350);
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Escape") { results.classList.remove("open"); input.blur(); }
+  });
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".map-search-wrapper")) results.classList.remove("open");
+  });
+}
+
+async function searchLocation(query) {
+  const results = document.getElementById("mapSearchResults");
+  results.innerHTML = `<div class="search-result-item" style="color:#888">Searching...</div>`;
+  results.classList.add("open");
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+    const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+    const data = await res.json();
+    if (!data.length) { results.innerHTML = `<div class="search-result-item" style="color:#888">No results found</div>`; return; }
+    results.innerHTML = data.map(item => {
+      const name = item.name || item.display_name.split(",")[0];
+      return `<div class="search-result-item" onclick="selectSearchResult(${item.lat}, ${item.lon}, '${name.replace(/'/g,"\\'")}')">
+        <div class="result-name">${name}</div>
+        <div class="result-addr">${item.display_name}</div>
+      </div>`;
+    }).join("");
+  } catch (err) {
+    results.innerHTML = `<div class="search-result-item" style="color:#c00">Search failed</div>`;
+  }
+}
+
+function selectSearchResult(lat, lng, name) {
+  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+  const latlng = [parseFloat(lat), parseFloat(lng)];
+  searchMarker = L.marker(latlng, {
+    icon: L.divIcon({ className: "custom-icon", html: `<div class="search-pin" style="font-size:28px">📌</div>` })
+  }).addTo(map).bindPopup(`<b>${name}</b><br><small>${lat}, ${lng}</small>`).openPopup();
+  map.setView(latlng, 16);
+  document.getElementById("mapSearchInput").value = name;
+  document.getElementById("mapSearchResults").classList.remove("open");
 }

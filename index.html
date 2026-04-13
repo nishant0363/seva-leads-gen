@@ -26,46 +26,44 @@
         <button onclick="saveCurrent()">💾 Save</button>
         <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
         <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
+        <button id="btnAddPoint" class="primary" onclick="toggleAddPointMode()">➕ Add Point</button>
       </div>
     </div>
 
-    <!-- FILTERS -->
+    <!-- FILTERS + DOWNLOAD -->
     <div class="container">
       <div class="filters">
-
-<select id="filterCategory">
-  <option value="">Category</option>
-    </select>
-
-    <select id="filterProperty">
-    <option value="">Property</option>
-    </select>
-
-    <select id="filterAppStatus">
-    <option value="">App status</option>
-    </select>
-
-    <select id="filterLeadStatus">
-    <option value="">Lead Status</option>
-    </select>
-
-    <select id="filterNM">
-    <option value="">NM</option>
-    </select>
-
-    <select id="filterMM">
-    <option value="">MM</option>
-    </select>
-
+        <select id="filterCategory"><option value="">Category</option></select>
+        <select id="filterProperty"><option value="">Property</option></select>
+        <select id="filterAppStatus"><option value="">App status</option></select>
+        <select id="filterLeadStatus"><option value="">Lead Status</option></select>
+        <select id="filterNM"><option value="">NM</option></select>
+        <select id="filterMM"><option value="">MM</option></select>
         <button class="primary" onclick="applyFilters()">Apply</button>
         <button onclick="clearFilters()">Clear</button>
+      </div>
 
+      <!-- DOWNLOAD ROW — sits inside the filter container, below the dropdowns -->
+      <div class="download-row">
+        <span class="download-label">⬇ Download filtered:</span>
+        <button class="dl-btn dl-nm"     onclick="downloadLayerKML('nm')">🗺 NM KML</button>
+        <button class="dl-btn dl-mm"     onclick="downloadLayerKML('mm')">🗺 MM KML</button>
+        <button class="dl-btn dl-pt"     onclick="downloadLayerKML('points')">📍 Points KML</button>
+        <span class="dl-sep">|</span>
+        <button class="dl-btn dl-nm"     onclick="downloadLayerCSV('nm')">📄 NM CSV</button>
+        <button class="dl-btn dl-mm"     onclick="downloadLayerCSV('mm')">📄 MM CSV</button>
+        <button class="dl-btn dl-pt"     onclick="downloadLayerCSV('points')">📄 Points CSV</button>
       </div>
     </div>
 
-    <!-- MAP -->
+    <!-- MAP + SEARCH -->
     <div class="container">
       <div class="map-card">
+        <!-- SEARCH BAR OVERLAID ON MAP -->
+        <div class="map-search-wrapper">
+          <input type="text" id="mapSearchInput" placeholder="🔍 Search location on map..." autocomplete="off"/>
+          <div id="mapSearchResults" class="search-results"></div>
+        </div>
         <div id="map"></div>
       </div>
     </div>
@@ -78,7 +76,109 @@
       </div>
     </div>
 
+    <!-- SHEET PREVIEW -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 Sheet Preview</h3>
+          <span id="sheetRowCount" class="row-count"></span>
+        </div>
+        <div class="sheet-table-wrapper">
+          <table id="sheetPreviewTable"></table>
+        </div>
+      </div>
+    </div>
+
   </div>
+
+  <!-- ADD POINT MODAL -->
+  <div id="addPointModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>📍 Add New Point</h3>
+        <button class="modal-close" onclick="closeAddPointModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0 0 12px;font-size:13px;color:#888;">
+          Lat &amp; Long are set from where you clicked on the map.
+          <strong>Sr. No</strong> is required — all other fields are optional.
+        </p>
+        <div class="modal-grid" id="addPointFields"></div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closeAddPointModal()">Cancel</button>
+        <button class="primary" onclick="submitAddPoint()">💾 Save to Sheet</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD ROW MODAL (kept for backward-compat, no longer triggered by default) -->
+  <div id="addRowModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>＋ Add New Row</h3>
+        <button class="modal-close" onclick="closeAddRowModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid" id="newRowFields"></div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closeAddRowModal()">Cancel</button>
+        <button class="primary" onclick="submitNewRow()">💾 Save Row</button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    /* ── Add-Point cursor hint ── */
+    #btnAddPoint.active {
+      background: #c0392b !important;
+    }
+
+    /* ── Download row ── */
+    .download-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e8e8e8;
+    }
+    .download-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #777;
+      white-space: nowrap;
+    }
+    .dl-sep {
+      color: #ccc;
+      font-size: 16px;
+      margin: 0 2px;
+    }
+    .dl-btn {
+      font-size: 12px;
+      padding: 5px 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      color: #fff;
+      font-weight: 500;
+      transition: opacity 0.15s;
+    }
+    .dl-btn:hover { opacity: 0.82; }
+    .dl-nm { background: #2980b9; }
+    .dl-mm { background: #8e44ad; }
+    .dl-pt { background: #16a085; }
+
+    /* ── Modal readonly lat/long fields ── */
+    .modal-field input[readonly] {
+      background: #f0f8f0;
+      color: #27ae60;
+      font-weight: 700;
+    }
+  </style>
+
 <script src="config.js"></script>
 <script src="app.js"></script>
 </body>
