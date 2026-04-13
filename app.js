@@ -8,6 +8,7 @@ let activeFilters = {};
 // ── Add-Point mode ──────────────────────────────────────────
 let addPointMode = false;
 let addPointMarker = null;   // temporary crosshair marker while picking
+let hoodLayers = [];         // { layer, nm, mm } — all drawn hood polygons
 
 console.log("🚀 App initializing...");
 init();
@@ -88,9 +89,9 @@ function renderMarkers() {
           row.NM = hood.nano_market;
           row.MM = hood.micro_market;
           row["NM Id"] = hood.hood_id;
-          if (row["Sr. No"]) {
+          if (row._rowIndex) {
             fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(row) })
-              .then(() => console.log(`✅ Auto-saved Sr. No: ${row["Sr. No"]}`))
+              .then(() => console.log(`✅ Auto-saved _rowIndex: ${row._rowIndex}`))
               .catch(err => console.error(`❌ Auto-save failed`, err));
           }
         }
@@ -129,6 +130,7 @@ function filterAndRender() {
     Object.keys(activeFilters).every(key => !activeFilters[key] || row[key] === activeFilters[key])
   );
   console.log(`🔽 ${filtered.length}/${allData.length} rows match filters`);
+  updateHoodVisibility();
   renderFilteredMarkers(filtered);
 }
 
@@ -157,6 +159,7 @@ function renderFilteredMarkers(data) {
 function clearFilters() {
   activeFilters = {};
   document.querySelectorAll("select").forEach(s => s.value = "");
+  updateHoodVisibility();
   renderMarkers();
 }
 
@@ -184,9 +187,8 @@ function populateFilters() {
 // FEATURE: ADD POINT BY CLICKING MAP
 // ============================================================
 
-// Fields shown in the Add-Point modal — Lat/Long auto-filled & locked; Sr. No required; rest optional
+// Fields shown in the Add-Point modal — Lat/Long auto-filled & locked; all fields optional
 const ADD_POINT_FIELDS = [
-  { key: "Sr. No",         label: "Sr. No *",       type: "number", required: true  },
   { key: "Name",           label: "Name",            type: "text"  },
   { key: "Category",       label: "Category",        type: "text"  },
   { key: "Sub Category",   label: "Sub Category",    type: "text"  },
@@ -264,19 +266,15 @@ function closeAddPointModal() {
 async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
-  const srNo = document.getElementById("ap_Sr__No").value.trim();
 
-  if (!srNo) { alert("❌ Sr. No is required"); return; }
-
+  // New rows have no _rowIndex — Apps Script will appendRow
   const newRow = {
     "Lat":  parseFloat(lat),
-    "Long": parseFloat(lng),
-    "Sr. No": parseFloat(srNo)
+    "Long": parseFloat(lng)
   };
 
   // collect optional fields
   ADD_POINT_FIELDS.forEach(f => {
-    if (f.key === "Sr. No") return; // already added
     const el = document.getElementById("ap_" + f.key.replace(/[\s.]/g,'_'));
     if (el && el.value.trim()) {
       newRow[f.key] = f.type === "number" ? parseFloat(el.value) : el.value.trim();
@@ -299,7 +297,7 @@ async function submitAddPoint() {
     const txt = await res.text();
     const json = JSON.parse(txt);
     if (json.success) {
-      alert(`✅ Point added — Sr. No: ${srNo}\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}`);
+      alert(`✅ Point added\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}`);
       closeAddPointModal();
       loadData();
     } else {
@@ -399,9 +397,8 @@ function pointsToKml(data, layerName) {
     .filter(row => !isNaN(parseFloat(row.Lat)) && !isNaN(parseFloat(row.Long)))
     .map(row => `
   <Placemark>
-    <name>${escXml(row.Name || "Point " + row["Sr. No"])}</name>
+    <name>${escXml(row.Name || "Point")}</name>
     <description><![CDATA[
-      Sr. No: ${row["Sr. No"] || ""}<br>
       Category: ${row.Category || ""}<br>
       NM: ${row.NM || ""}<br>
       MM: ${row.MM || ""}<br>
@@ -462,7 +459,7 @@ function hoodsToCsvWkt(hoodList, nameField) {
 }
 
 function pointsToCsvWkt(data) {
-  const headers = ["WKT", "sr_no", "name", "category", "nm", "mm", "road", "final_status", "lat", "long"];
+  const headers = ["WKT", "name", "category", "nm", "mm", "road", "final_status", "lat", "long"];
   const rows = data
     .filter(row => !isNaN(parseFloat(row.Lat)) && !isNaN(parseFloat(row.Long)))
     .map(row => {
@@ -470,7 +467,6 @@ function pointsToCsvWkt(data) {
       const lng = parseFloat(row.Long);
       return [
         `"POINT(${lng} ${lat})"`,
-        `"${row["Sr. No"] || ""}"`,
         `"${(row.Name || "").replace(/"/g,'""')}"`,
         `"${row.Category || ""}"`,
         `"${row.NM || ""}"`,
@@ -603,7 +599,7 @@ async function fillLatLong() {
       updated.push(row);
     } catch (e) {
       failedCount++;
-      console.error(`❌ Row Sr.No ${row["Sr. No"]} — failed:`, e.message);
+      console.error(`❌ Row _rowIndex:${row._rowIndex} — failed:`, e.message);
     }
   }
   updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
@@ -638,6 +634,7 @@ function fixMissingNM() {
 // HOOD / GEOMETRY UTILITIES
 // ============================================================
 function drawHoods() {
+  hoodLayers = [];
   hoods.forEach(h => {
     if (!h.geometry) return;
     const layer = L.geoJSON(h.geometry, {
@@ -647,6 +644,28 @@ function drawHoods() {
       layer.setStyle({ fillColor: "orange", fillOpacity: 0.4 });
       showHoodDetails(h);
     });
+    hoodLayers.push({ layer, nm: h.nano_market, mm: h.micro_market });
+  });
+}
+
+// Show only hoods whose NM/MM match the active filter; show all when no filter
+function updateHoodVisibility() {
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  const noFilter = !filterNM && !filterMM;
+
+  hoodLayers.forEach(({ layer, nm, mm }) => {
+    const nmMatch = !filterNM || nm === filterNM;
+    const mmMatch = !filterMM || mm === filterMM;
+    const visible = noFilter || (nmMatch && mmMatch);
+
+    if (visible) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+      // reset highlight to default style
+      layer.setStyle({ color: "blue", weight: 1, fillColor: "#4da6ff", fillOpacity: 0.15 });
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
   });
 }
 
@@ -694,6 +713,7 @@ function showDetails(row) {
   const table = document.getElementById("detailsTable");
   table.innerHTML = "";
   Object.keys(row).forEach(key => {
+    if (key === "_rowIndex") return; // internal field — hide from UI
     table.innerHTML += `<tr><td>${key}</td><td contenteditable="true" data-key="${key}">${row[key] || ""}</td></tr>`;
   });
 }
@@ -703,7 +723,7 @@ function saveCurrent() {
   document.querySelectorAll("[contenteditable]").forEach(cell => {
     currentRow[cell.dataset.key] = cell.innerText;
   });
-  if (!currentRow["Sr. No"]) { alert("❌ Missing Sr. No"); return; }
+  if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing data first"); return; }
   fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
     .then(() => alert("✅ Saved"))
     .catch(err => alert("❌ Save failed: " + err.message));
@@ -717,7 +737,7 @@ function renderSheetPreview(data) {
   const countEl = document.getElementById("sheetRowCount");
   if (!data.length) { table.innerHTML = "<tr><td>No data</td></tr>"; return; }
   countEl.textContent = `${data.length} rows`;
-  const previewCols = ["Sr. No", "Name", "Category", "NM", "MM", "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
+  const previewCols = ["Name", "Category", "NM", "MM", "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
   table.innerHTML =
     `<thead><tr>${availableCols.map(c => `<th>${c}</th>`).join("")}</tr></thead>` +
