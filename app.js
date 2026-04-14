@@ -93,8 +93,8 @@ function buildLegend() {
     { key: "hoods",      color: "#4da6ff", symbol: "■", label: "Hood Polygons"   },
     { key: "properties", color: "#e74c3c", symbol: "📍", label: "Properties"     },
     { key: "hotspots",   color: "#f39c12", symbol: "H",  label: "Hotspots"       },
-    { key: "demand",     color: "#2980b9", symbol: "●",  label: "Demand"         },
-    { key: "idle",       color: "#c0392b", symbol: "●",  label: "Idle"           },
+    { key: "demand",     color: "#2980b9", symbol: "●",  label: "Demand (size = point count)"  },
+    { key: "idle",       color: "#c0392b", symbol: "●",  label: "Idle (size = point count)"    },
     { key: "centroids",  color: "#27ae60", symbol: "C",  label: "Demand Centroids"}
   ];
 
@@ -191,6 +191,43 @@ function dotIcon(color) {
   });
 }
 
+// Scaled dot icon — size and color intensity vary with value.
+// value    : the data value for this point (e.g. num_points, idle_min)
+// min/max  : dataset range for normalization
+// hLow/hHigh : hue for low and high ends (0–360). Same hue = monochromatic gradient.
+// Returns an L.divIcon with radius 6–28px and lightness 75%→25% (light→dark).
+function scaledDotIcon(value, min, max, hLow, hHigh) {
+  const MIN_R = 5, MAX_R = 22;
+
+  // Normalize 0–1, guard against flat datasets
+  const t = (max > min) ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
+
+  const r = Math.round(MIN_R + t * (MAX_R - MIN_R));
+
+  // Interpolate hue and lightness
+  const hue  = Math.round(hLow + t * (hHigh - hLow));
+  const sat  = 85;
+  const lite = Math.round(72 - t * 47); // 72% (light) → 25% (dark)
+  const color = `hsl(${hue},${sat}%,${lite}%)`;
+
+  // Border darkens with intensity for contrast
+  const borderAlpha = (0.2 + t * 0.5).toFixed(2);
+
+  return L.divIcon({
+    className: "",
+    html: `<div style="
+      background:${color};
+      border-radius:50%;
+      width:${r*2}px;height:${r*2}px;
+      border:1.5px solid rgba(0,0,0,${borderAlpha});
+      box-shadow:0 1px 4px rgba(0,0,0,${(0.2+t*0.3).toFixed(2)});
+      opacity:0.88;
+    "></div>`,
+    iconSize: [r*2, r*2],
+    iconAnchor: [r, r]
+  });
+}
+
 // ── NM/MM lookup for extra-layer rows ────────────────────────
 // Stamps _nm and _mm onto each row by doing a point-in-polygon check.
 // Called once when data first loads; results cached on the row object.
@@ -240,16 +277,31 @@ function renderDemand(data) {
   demandMarkers = [];
   demandData = data;
   stampHoodInfo(data, "lat", "lng");
+
+  // Compute min/max of num_points across the whole dataset for scaling
+  const vals = data.map(r => parseFloat(r.num_points)).filter(v => !isNaN(v));
+  const minV = vals.length ? Math.min(...vals) : 0;
+  const maxV = vals.length ? Math.max(...vals) : 1;
+
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const m = L.marker([lat, lng], { icon: dotIcon("#2980b9") })
-      .bindPopup(`<b>📦 Demand</b><br>Cluster: ${row.cluster || "-"}<br>Orders: ${row.orders || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    const numPts = parseFloat(row.num_points) || 0;
+    // Blue gradient: hue 200 (light sky) → 220 (deep blue)
+    const icon = scaledDotIcon(numPts, minV, maxV, 200, 220);
+    const m = L.marker([lat, lng], { icon })
+      .bindPopup(`
+        <b>📦 Demand</b><br>
+        Cluster: ${row.cluster || "-"}<br>
+        Points: ${row.num_points || "-"}<br>
+        NM: ${row._nm || "-"}<br>
+        MM: ${row._mm || "-"}
+      `);
     m._extraRow = row;
     if (layerVisible.demand && passesNMMFilter(row)) m.addTo(map);
     demandMarkers.push(m);
   });
-  console.log(`📍 ${demandMarkers.length} demand markers`);
+  console.log(`📍 ${demandMarkers.length} demand markers (scaled by num_points, min:${minV} max:${maxV})`);
 }
 
 function renderIdle(data) {
@@ -257,16 +309,32 @@ function renderIdle(data) {
   idleMarkers = [];
   idleData = data;
   stampHoodInfo(data, "lat", "lng");
+
+  // Compute min/max of num_points across dataset for scaling
+  const vals = data.map(r => parseFloat(r.num_points)).filter(v => !isNaN(v));
+  const minV = vals.length ? Math.min(...vals) : 0;
+  const maxV = vals.length ? Math.max(...vals) : 1;
+
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const m = L.marker([lat, lng], { icon: dotIcon("#c0392b") })
-      .bindPopup(`<b>🚗 Idle</b><br>Cluster: ${row.cluster || "-"}<br>Hood: ${row.hood || "-"}<br>Idle min: ${row.idle_min || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
+    const numPts = parseFloat(row.num_points) || 0;
+    // Red gradient: hue 5 (light coral) → 0 (deep red)
+    const icon = scaledDotIcon(numPts, minV, maxV, 5, 0);
+    const m = L.marker([lat, lng], { icon })
+      .bindPopup(`
+        <b>🚗 Idle</b><br>
+        Cluster: ${row.cluster || "-"}<br>
+        Hood: ${row.hood || "-"}<br>
+        Idle Points Count: ${row.num_points || "-"}<br>
+        NM: ${row._nm || "-"}<br>
+        MM: ${row._mm || "-"}
+      `);
     m._extraRow = row;
     if (layerVisible.idle && passesNMMFilter(row)) m.addTo(map);
     idleMarkers.push(m);
   });
-  console.log(`📍 ${idleMarkers.length} idle markers`);
+  console.log(`📍 ${idleMarkers.length} idle markers (scaled by idle_min, min:${minV} max:${maxV})`);
 }
 
 function renderCentroids(data) {
