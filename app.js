@@ -304,17 +304,9 @@ async function loadData() {
       renderMarkers();
     }
     renderSheetPreview(allData);
-    // Re-apply date filter if one is active, otherwise show all
-    const dateFrom = document.getElementById("dateFrom")?.value;
-    const dateTo   = document.getElementById("dateTo")?.value;
-    if (dateFrom || dateTo) {
-      const dateFiltered = getDateFilteredData();
-      renderSheetPreview(dateFiltered);
-      renderSummaryTables(dateFiltered);
-    } else {
-      renderSheetPreview(allData);
-      renderSummaryTables(allData);
-    }
+    // Re-apply sheet filters if any are active, otherwise show all
+    const sfActive = Object.values(getSheetFilters()).some(v => v);
+    renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -911,6 +903,10 @@ function assignHood(coords) {
 
 function isEmpty(val) { return !val || val.toString().trim() === "" || val === "NA"; }
 
+function escHtml(str) {
+  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
 function getCategoryIcon(category) {
   return L.divIcon({
     className: "custom-icon",
@@ -921,6 +917,7 @@ function getCategoryIcon(category) {
 // ============================================================
 // DETAILS + SAVE
 // ============================================================
+
 function showHoodDetails(h) {
   document.getElementById("detailsTable").innerHTML = `
     <tr><td><b>NM</b></td><td>${h.nano_market}</td></tr>
@@ -930,14 +927,88 @@ function showHoodDetails(h) {
   `;
 }
 
+// Columns that get a <select> dropdown in the details panel.
+// Add/remove options here as your sheet values change.
+const DETAIL_DROPDOWNS = {
+  "Property": [
+    "Private", "Public", "Semi-Public"
+  ],
+  "App status": [
+    "Active", "Inactive", "Pending", "Blocked"
+  ],
+  "Lead Status": [
+    "1. Lead Gen - Owner number pending",
+    "2. First Call - Meeting pending",
+    "3. Meeting done - Proposal pending",
+    "4. Proposal shared - Negotiation pending",
+    "5. Negotiation done - Agreement pending",
+    "6. Agreement signed - Setup pending",
+    "Dropped"
+  ],
+  "Final Status": [
+    "Cold", "Warm", "Hot",
+    "Dropped off", "Closed", "On Hold"
+  ],
+  "Closure type": [
+    "Revenue Share", "Fixed", "Free", "Barter"
+  ],
+  "Set up": [
+    "Done", "Pending", "Not Required"
+  ],
+  "Category": [
+    "Shop", "Apartment", "PG", "Restaurant",
+    "Bus Stop", "Park", "Office", "Mall",
+    "Hospital", "School", "Gym", "Other"
+  ]
+};
+
 function showDetails(row) {
   currentRow = row;
   const table = document.getElementById("detailsTable");
   table.innerHTML = "";
+
   Object.keys(row).forEach(key => {
     if (key === "_rowIndex") return;
-    table.innerHTML += `<tr><td>${key}</td><td contenteditable="true" data-key="${key}">${row[key] || ""}</td></tr>`;
+
+    const val = row[key] != null ? row[key] : "";
+
+    if (DETAIL_DROPDOWNS[key]) {
+      // Build a <select> with all options; pre-select current value
+      const options = DETAIL_DROPDOWNS[key].map(opt =>
+        `<option value="${escHtml(opt)}" ${opt === String(val) ? "selected" : ""}>${escHtml(opt)}</option>`
+      ).join("");
+      // Add current value as an option if it's not in the predefined list
+      const extraOption = val && !DETAIL_DROPDOWNS[key].includes(String(val))
+        ? `<option value="${escHtml(val)}" selected>${escHtml(val)}</option>`
+        : "";
+      table.innerHTML += `
+        <tr>
+          <td>${escHtml(key)}</td>
+          <td>
+            <select class="detail-select" data-key="${escHtml(key)}">
+              <option value="">-- select --</option>
+              ${extraOption}${options}
+            </select>
+          </td>
+        </tr>`;
+    } else {
+      table.innerHTML += `
+        <tr>
+          <td>${escHtml(key)}</td>
+          <td contenteditable="true" data-key="${escHtml(key)}">${escHtml(String(val))}</td>
+        </tr>`;
+    }
   });
+
+  // Inline Save button at the bottom of the details table
+  table.innerHTML += `
+    <tr>
+      <td colspan="2" style="padding-top:10px;border-top:1px solid #eee">
+        <button class="primary" onclick="saveCurrent()" style="width:100%;padding:9px;font-size:14px">
+          💾 Save Changes
+        </button>
+      </td>
+    </tr>`;
 }
 
 // Returns timestamp string in Google Sheets / GForm format: "M/D/YYYY HH:MM:SS"
@@ -949,9 +1020,19 @@ function formatTimestamp(date) {
 
 function saveCurrent() {
   if (!currentRow) return;
+
+  // Read contenteditable cells
   document.querySelectorAll("[contenteditable]").forEach(cell => {
-    currentRow[cell.dataset.key] = cell.innerText;
+    const key = cell.dataset.key;
+    if (key) currentRow[key] = cell.innerText.trim();
   });
+
+  // Read dropdown selects in the details table
+  document.querySelectorAll(".detail-select").forEach(sel => {
+    const key = sel.dataset.key;
+    if (key) currentRow[key] = sel.value;
+  });
+
   if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing"); return; }
 
   // Always update Timestamp to now on every manual save
@@ -960,7 +1041,6 @@ function saveCurrent() {
   fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
     .then(() => {
       alert("✅ Saved");
-      // Refresh the details table so timestamp shows updated value
       showDetails(currentRow);
     })
     .catch(err => alert("❌ Save failed: " + err.message));
@@ -1037,41 +1117,131 @@ function getDateFilteredData() {
   });
 }
 
-function applyDateFilter() {
-  const data = getDateFilteredData();
-  renderSheetPreview(data);
-  renderSummaryTables(data);
+// ============================================================
+// SHEET PREVIEW — independent filters + totals row
+// ============================================================
+
+// Collect current sheet filter values from the sheet filter bar
+function getSheetFilters() {
+  return {
+    Category:       document.getElementById("sfCategory")?.value      || "",
+    Property:       document.getElementById("sfProperty")?.value      || "",
+    "App status":   document.getElementById("sfAppStatus")?.value     || "",
+    "Lead Status":  document.getElementById("sfLeadStatus")?.value    || "",
+    "Final Status": document.getElementById("sfFinalStatus")?.value   || "",
+    NM:             document.getElementById("sfNM")?.value            || "",
+    MM:             document.getElementById("sfMM")?.value            || "",
+    dateFrom:       document.getElementById("sfDateFrom")?.value      || "",
+    dateTo:         document.getElementById("sfDateTo")?.value        || "",
+  };
 }
 
-function clearDateFilter() {
-  const f = document.getElementById("dateFrom");
-  const t = document.getElementById("dateTo");
-  if (f) f.value = "";
-  if (t) t.value = "";
+function getSheetFilteredData() {
+  const sf = getSheetFilters();
+  const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
+  const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
+
+  return allData.filter(row => {
+    // Standard column filters
+    const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
+    for (const key of colKeys) {
+      if (sf[key] && row[key] !== sf[key]) return false;
+    }
+    // Timestamp range
+    if (from || to) {
+      const ts = parseTimestamp(row["Timestamp"]);
+      if (!ts) return false;
+      if (from && ts < from) return false;
+      if (to   && ts > to)   return false;
+    }
+    return true;
+  });
+}
+
+function applySheetFilters() {
+  const data = getSheetFilteredData();
+  renderSheetPreview(data);
+}
+
+function clearSheetFilters() {
+  ["sfCategory","sfProperty","sfAppStatus","sfLeadStatus","sfFinalStatus","sfNM","sfMM"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  ["sfDateFrom","sfDateTo"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
   renderSheetPreview(allData);
-  renderSummaryTables(allData);
+}
+
+// Keep backward-compat aliases used by loadData
+function applyDateFilter()  { applySheetFilters(); }
+function clearDateFilter()  { clearSheetFilters(); }
+
+function populateSheetFilters() {
+  const fields = [
+    { key: "Category",      id: "sfCategory"     },
+    { key: "Property",      id: "sfProperty"     },
+    { key: "App status",    id: "sfAppStatus"    },
+    { key: "Lead Status",   id: "sfLeadStatus"   },
+    { key: "Final Status",  id: "sfFinalStatus"  },
+    { key: "NM",            id: "sfNM"           },
+    { key: "MM",            id: "sfMM"           },
+  ];
+  fields.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    const current = el.value;
+    const vals = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    el.innerHTML = `<option value="">${f.key}</option>` +
+      vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
+    el.value = current;
+  });
 }
 
 function renderSheetPreview(data) {
   const table   = document.getElementById("sheetPreviewTable");
   const countEl = document.getElementById("sheetRowCount");
-  if (!data.length) { table.innerHTML = "<tr><td>No data</td></tr>"; countEl.textContent = "0 rows"; return; }
-  countEl.textContent = `${data.length} rows`;
+  if (!table) return;
+
+  populateSheetFilters();
+
+  if (!data.length) {
+    table.innerHTML = "<tr><td colspan='99' style='text-align:center;color:#aaa;padding:16px'>No rows match filters</td></tr>";
+    if (countEl) countEl.textContent = "0 rows";
+    return;
+  }
+  if (countEl) countEl.textContent = `${data.length} rows`;
 
   const previewCols = ["Timestamp", "Name of the property", "Name", "Category", "NM", "MM",
-    "Lead Status", "Final Status", "App status", "Road", "Contact Name", "Contact number"];
+    "Lead Status", "Final Status", "App status", "Road", "Property",
+    "Contact Name", "Contact number"];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
 
+  // ── Body rows ──
+  const bodyRows = data.map((row, idx) => `
+    <tr data-idx="${idx}" style="cursor:pointer">
+      ${availableCols.map(c => {
+        const raw = row[c] != null ? row[c] : "";
+        const display = c === "Timestamp" ? formatTsDisplay(row[c]) : escHtml(raw);
+        return `<td title="${escHtml(String(raw))}">${display}</td>`;
+      }).join("")}
+    </tr>`).join("");
+
+  // ── Totals row — count of non-empty values per column ──
+  const totalsRow = `<tr class="summary-total-row" style="position:sticky;bottom:0">
+    ${availableCols.map((c, i) => {
+      if (i === 0) return `<td><b>Total: ${data.length}</b></td>`;
+      const nonEmpty = data.filter(r => r[c] != null && r[c] !== "").length;
+      return `<td><b>${nonEmpty}</b></td>`;
+    }).join("")}
+  </tr>`;
+
   table.innerHTML =
-    `<thead><tr>${availableCols.map(c => `<th>${c}</th>`).join("")}</tr></thead>` +
-    `<tbody>${data.map((row, idx) => `
-      <tr data-idx="${idx}" style="cursor:pointer">
-        ${availableCols.map(c => {
-          const raw = row[c] || "";
-          const display = c === "Timestamp" ? formatTsDisplay(row[c]) : raw;
-          return `<td title="${String(raw).replace(/"/g,'&quot;')}">${display}</td>`;
-        }).join("")}
-      </tr>`).join("")}</tbody>`;
+    `<thead><tr>${availableCols.map(c => `<th>${escHtml(c)}</th>`).join("")}</tr></thead>` +
+    `<tbody>${bodyRows}</tbody>` +
+    `<tfoot>${totalsRow}</tfoot>`;
 
   table.querySelectorAll("tbody tr").forEach(tr => {
     tr.addEventListener("click", () => {
@@ -1082,119 +1252,23 @@ function renderSheetPreview(data) {
       document.querySelector(".details-card").scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
-
-  renderSummaryTables(data);
 }
 
-// ── Summary tables ────────────────────────────────────────────
-
-// All fields shown in both NM and MM summary sections
-const SUMMARY_FIELDS = [
-  { key: "Category",      label: "Category"      },
-  { key: "Lead Status",   label: "Lead Status"   },
-  { key: "Final Status",  label: "Final Status"  },
-  { key: "App status",    label: "App Status"    },
-  { key: "Property",      label: "Property Type" },
-];
-
-// Build one summary block HTML — groupKey is "NM" or "MM"
-function buildSummaryBlock(data, groupKey, field) {
-  const vals = [...new Set(data.map(r => r[field.key]).filter(Boolean))].sort();
-  if (!vals.length) return "";
-
-  // Group data by groupKey value
-  const groups = {};
-  data.forEach(row => {
-    const g = row[groupKey] || `(No ${groupKey})`;
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(row);
-  });
-  const groupList = Object.keys(groups).sort();
-
-  // Unique table id for CSV download
-  const tableId = `summarytbl_${groupKey}_${field.key.replace(/\s/g,"_")}`;
-
-  const headerRow = `<tr>
-    <th>${groupKey}</th>
-    <th>Total</th>
-    ${vals.map(v => `<th>${escHtml(v)}</th>`).join("")}
-  </tr>`;
-
-  const bodyRows = groupList.map(g => {
-    const rows = groups[g];
-    const counts = {};
-    rows.forEach(r => { const v = r[field.key]; if (v) counts[v] = (counts[v] || 0) + 1; });
-    return `<tr>
-      <td><b>${escHtml(g)}</b></td>
-      <td><b>${rows.length}</b></td>
-      ${vals.map(v => `<td>${counts[v] || 0}</td>`).join("")}
-    </tr>`;
-  }).join("");
-
-  // Totals row
-  const totalCounts = {};
-  vals.forEach(v => { totalCounts[v] = data.filter(r => r[field.key] === v).length; });
-  const totalsRow = `<tr class="summary-total-row">
-    <td><b>Total</b></td>
-    <td><b>${data.length}</b></td>
-    ${vals.map(v => `<td><b>${totalCounts[v] || 0}</b></td>`).join("")}
-  </tr>`;
-
-  return `
-    <div class="summary-block">
-      <div class="summary-block-header">
-        <h4 class="summary-block-title">${field.label} by ${groupKey}</h4>
-        <button class="summary-dl-btn" onclick="downloadSummaryCSV('${tableId}','${field.label} by ${groupKey}')">⬇ CSV</button>
-      </div>
-      <div class="summary-table-wrapper">
-        <table class="summary-table" id="${tableId}">
-          <thead>${headerRow}</thead>
-          <tbody>${bodyRows}${totalsRow}</tbody>
-        </table>
-      </div>
-    </div>`;
+// Download the current sheet preview as CSV
+function downloadSheetPreviewCSV() {
+  const table = document.getElementById("sheetPreviewTable");
+  if (!table) return;
+  const rows = [...table.querySelectorAll("thead tr, tbody tr, tfoot tr")].map(tr =>
+    [...tr.querySelectorAll("th,td")].map(td => `"${td.innerText.replace(/"/g,'""')}"`).join(",")
+  );
+  const dateTag = new Date().toISOString().slice(0,10);
+  downloadBlob(rows.join("\n"), `sheet_preview_${dateTag}.csv`, "text/csv");
 }
 
-function escHtml(str) {
-  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
-// Download a rendered summary table as CSV by reading its DOM
-function downloadSummaryCSV(tableId, label) {
-  const table = document.getElementById(tableId);
-  if (!table) { alert("Table not found"); return; }
-
-  const rows = [];
-  table.querySelectorAll("tr").forEach(tr => {
-    const cells = [...tr.querySelectorAll("th,td")].map(td =>
-      `"${td.innerText.replace(/"/g,'""')}"`
-    );
-    rows.push(cells.join(","));
-  });
-
-  const safeLabel = label.replace(/[^a-z0-9]/gi, "_").toLowerCase();
-  const dateTag   = new Date().toISOString().slice(0,10);
-  downloadBlob(rows.join("\n"), `${safeLabel}_${dateTag}.csv`, "text/csv");
-}
-
-function renderSummaryTables(data) {
-  const container = document.getElementById("summaryTablesContainer");
-  if (!container) return;
-  if (!data.length) { container.innerHTML = `<p style="color:#aaa;padding:12px">No data for selected range.</p>`; return; }
-
-  // ── NM-level section ──
-  const nmSection = `
-    <div class="summary-section-title">📍 NM Level Summary</div>
-    ${SUMMARY_FIELDS.map(f => buildSummaryBlock(data, "NM", f)).join("")}
-  `;
-
-  // ── MM-level section ──
-  const mmSection = `
-    <div class="summary-section-title" style="margin-top:28px">🏘 MM Level Summary</div>
-    ${SUMMARY_FIELDS.map(f => buildSummaryBlock(data, "MM", f)).join("")}
-  `;
-
-  container.innerHTML = nmSection + mmSection;
+// Remove old summary tables — no longer used
+function renderSummaryTables() {
+  const c = document.getElementById("summaryTablesContainer");
+  if (c) c.innerHTML = "";
 }
 
 function refreshData() { loadData(); loadExtraLayers(); }

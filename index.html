@@ -97,32 +97,31 @@
         <div class="sheet-preview-header">
           <h3>📊 Sheet Preview</h3>
           <span id="sheetRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadSheetPreviewCSV()" style="margin-left:auto">⬇ CSV</button>
         </div>
 
-        <!-- DATE RANGE FILTER -->
-        <div class="date-filter-bar">
-          <span class="date-filter-label">📅 Filter by Timestamp:</span>
-          <input type="date" id="dateFrom" />
-          <span style="color:#888">to</span>
-          <input type="date" id="dateTo" />
-          <button class="primary" onclick="applyDateFilter()">Apply</button>
-          <button onclick="clearDateFilter()">Clear</button>
+        <!-- SHEET FILTERS — independent from map filters -->
+        <div class="sheet-filter-bar">
+          <select id="sfCategory"><option value="">Category</option></select>
+          <select id="sfProperty"><option value="">Property</option></select>
+          <select id="sfAppStatus"><option value="">App Status</option></select>
+          <select id="sfLeadStatus"><option value="">Lead Status</option></select>
+          <select id="sfFinalStatus"><option value="">Final Status</option></select>
+          <select id="sfNM"><option value="">NM</option></select>
+          <select id="sfMM"><option value="">MM</option></select>
+        </div>
+        <div class="sheet-filter-bar" style="margin-top:6px">
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="sfDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="sfDateTo" />
+          <button class="primary" onclick="applySheetFilters()">Apply</button>
+          <button onclick="clearSheetFilters()">Clear</button>
         </div>
 
         <div class="sheet-table-wrapper">
           <table id="sheetPreviewTable"></table>
         </div>
-      </div>
-    </div>
-
-    <!-- SUMMARY TABLES -->
-    <div class="container">
-      <div class="sheet-preview-card">
-        <div class="sheet-preview-header">
-          <h3>📈 Summary by NM</h3>
-          <span style="font-size:12px;color:#888">Updates with date filter above</span>
-        </div>
-        <div id="summaryTablesContainer"></div>
       </div>
     </div>
 
@@ -236,15 +235,28 @@
       font-weight: 700;
     }
 
-    /* ── Date filter bar ── */
-    .date-filter-bar {
+    /* ── Sheet filter bar ── */
+    .sheet-filter-bar {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 8px;
-      padding: 10px 0 12px;
-      border-bottom: 1px solid #eee;
-      margin-bottom: 10px;
+      gap: 6px;
+      padding: 8px 0 6px;
+    }
+    .sheet-filter-bar:first-of-type {
+      border-top: 1px solid #eee;
+      margin-top: 8px;
+      padding-top: 10px;
+    }
+    .sheet-filter-bar + .sheet-filter-bar {
+      padding-top: 0;
+      border-top: none;
+    }
+    .sheet-filter-bar select {
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
     }
     .date-filter-label {
       font-size: 13px;
@@ -252,55 +264,57 @@
       color: #555;
       white-space: nowrap;
     }
-    .date-filter-bar input[type="date"] {
+    .sheet-filter-bar input[type="date"] {
       padding: 5px 8px;
       border: 1px solid #ddd;
       border-radius: 6px;
       font-size: 13px;
     }
-
-    /* ── Summary tables ── */
-    .summary-block {
-      margin-bottom: 22px;
-    }
-    .summary-block-header {
+    /* ── Sheet preview header flex ── */
+    .sheet-preview-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      margin-bottom: 6px;
+      gap: 10px;
     }
-    .summary-block-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      margin: 0;
-      padding-bottom: 4px;
-      border-bottom: 2px solid #e8e8e8;
-      flex: 1;
+    .sheet-preview-header h3 { margin: 0; }
+
+    /* ── Totals footer row ── */
+    #sheetPreviewTable tfoot td {
+      background: #f0f4f8;
+      border-top: 2px solid #d0d0d0;
+      font-size: 12px;
+      padding: 5px 8px;
+      text-align: center;
+      position: sticky;
+      bottom: 0;
     }
+    #sheetPreviewTable tfoot td:first-child { text-align: left; }
     .summary-dl-btn {
       font-size: 11px;
-      padding: 3px 9px;
+      padding: 4px 10px;
       border: none;
       border-radius: 5px;
       cursor: pointer;
       background: #16a085;
       color: #fff;
       font-weight: 600;
-      margin-left: 10px;
       white-space: nowrap;
-      flex-shrink: 0;
     }
     .summary-dl-btn:hover { opacity: 0.82; }
-    .summary-section-title {
-      font-size: 15px;
-      font-weight: 700;
-      color: #2c3e50;
-      padding: 8px 0 12px;
-      border-bottom: 3px solid #2980b9;
-      margin-bottom: 16px;
+
+    /* ── Detail panel dropdowns ── */
+    .detail-select {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .detail-select:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 0 2px rgba(52,152,219,0.15);
     }
     .summary-table-wrapper {
       overflow-x: auto;
