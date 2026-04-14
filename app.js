@@ -54,8 +54,31 @@ async function init() {
   initMapSearch();
 
   map.on("click", function (e) {
-    if (!addPointMode) return;
-    openAddPointModal(e.latlng.lat, e.latlng.lng);
+    if (addPointMode) {
+      openAddPointModal(e.latlng.lat, e.latlng.lng);
+      return;
+    }
+
+    // Show a copyable lat/long popup on every normal click
+    const { lat, lng } = e.latlng;
+    const coordStr = `${lat.toFixed(7)}, ${lng.toFixed(7)}`;
+    L.popup({ closeButton: true, className: "latlng-popup" })
+      .setLatLng(e.latlng)
+      .setContent(`
+        <div style="font-size:13px;line-height:1.6">
+          <div style="font-weight:600;margin-bottom:4px">📌 Coordinates</div>
+          <code style="background:#f4f4f4;padding:3px 7px;border-radius:4px;font-size:12px;display:block;margin-bottom:8px">${lat.toFixed(7)}, ${lng.toFixed(7)}</code>
+          <button onclick="
+            navigator.clipboard.writeText('${coordStr}')
+              .then(() => { this.textContent='✅ Copied!'; setTimeout(()=>this.textContent='📋 Copy',1500); })
+              .catch(() => { this.textContent='❌ Failed'; setTimeout(()=>this.textContent='📋 Copy',1500); });
+          " style="
+            width:100%;padding:5px 0;border:none;border-radius:5px;
+            background:#2980b9;color:#fff;font-size:12px;font-weight:600;cursor:pointer
+          ">📋 Copy</button>
+        </div>
+      `)
+      .openOn(map);
   });
 }
 
