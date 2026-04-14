@@ -94,7 +94,7 @@ function buildLegend() {
     { key: "properties", color: "#e74c3c", symbol: "📍", label: "Properties"     },
     { key: "hotspots",   color: "#f39c12", symbol: "H",  label: "Hotspots"       },
     { key: "demand",     color: "#2980b9", symbol: "●",  label: "Demand (size = point count)"  },
-    { key: "idle",       color: "#c0392b", symbol: "●",  label: "Idle (size = point count)"    },
+    { key: "idle",       color: "#c0392b", symbol: "●",  label: "Idle (size = idle minutes)"    },
     { key: "centroids",  color: "#27ae60", symbol: "C",  label: "Demand Centroids"}
   ];
 
@@ -310,23 +310,23 @@ function renderIdle(data) {
   idleData = data;
   stampHoodInfo(data, "lat", "lng");
 
-  // Compute min/max of num_points across dataset for scaling
-  const vals = data.map(r => parseFloat(r.num_points)).filter(v => !isNaN(v));
+  // Compute min/max of idle_min across dataset for scaling
+  const vals = data.map(r => parseFloat(r.idle_min)).filter(v => !isNaN(v));
   const minV = vals.length ? Math.min(...vals) : 0;
   const maxV = vals.length ? Math.max(...vals) : 1;
 
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const numPts = parseFloat(row.num_points) || 0;
+    const idleMin = parseFloat(row.idle_min) || 0;
     // Red gradient: hue 5 (light coral) → 0 (deep red)
-    const icon = scaledDotIcon(numPts, minV, maxV, 5, 0);
+    const icon = scaledDotIcon(idleMin, minV, maxV, 5, 0);
     const m = L.marker([lat, lng], { icon })
       .bindPopup(`
         <b>🚗 Idle</b><br>
         Cluster: ${row.cluster || "-"}<br>
         Hood: ${row.hood || "-"}<br>
-        Idle Points Count: ${row.num_points || "-"}<br>
+        Idle min: ${row.idle_min || "-"}<br>
         NM: ${row._nm || "-"}<br>
         MM: ${row._mm || "-"}
       `);
@@ -398,6 +398,7 @@ async function loadData() {
     // Re-apply sheet filters if any are active, otherwise show all
     const sfActive = Object.values(getSheetFilters()).some(v => v);
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
+    renderSummaryTables();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -1022,34 +1023,33 @@ function showHoodDetails(h) {
 // Add/remove options here as your sheet values change.
 const DETAIL_DROPDOWNS = {
   "Property": [
-    "Private", "Public", "Semi-Public"
+    "Private", "Public"
   ],
   "App status": [
-    "Active", "Inactive", "Pending", "Blocked"
+    "Active", "Inactive"
   ],
   "Lead Status": [
-    "1. Lead Gen - Owner number pending",
-    "2. First Call - Meeting pending",
-    "3. Meeting done - Proposal pending",
-    "4. Proposal shared - Negotiation pending",
-    "5. Negotiation done - Agreement pending",
-    "6. Agreement signed - Setup pending",
-    "Dropped"
+    "2. Owner conversation pending",
+    "3. Owner's confirmation pending",
+    "4. Confirmed",
+    "5. Follow up required",
+    "6. Dropped"
   ],
   "Final Status": [
-    "Cold", "Warm", "Hot",
-    "Dropped off", "Closed", "On Hold"
+    "Dropped off", "Active", "Cold", "Deal closed", 
+    "Deal closed - sign pending", "No deal required",
+    "To be reactivated", "Deal - closed - Chairs pending", 
+    "Dropped off after launch"
   ],
   "Closure type": [
-    "Revenue Share", "Fixed", "Free", "Barter"
+    "Resting + Washroom", "Resting", "NA"
   ],
   "Set up": [
-    "Done", "Pending", "Not Required"
+    "Chairs to be set", "Owner will setup chairs", "Chairs available", "NA"
   ],
   "Category": [
-    "Shop", "Apartment", "PG", "Restaurant",
-    "Bus Stop", "Park", "Office", "Mall",
-    "Hospital", "School", "Gym", "Other"
+    "Ladies PG", "Shop", "Restaurant", "Apartment", "Gated community", "Independent Builder floor",
+    "Bus Stop", "Park", "Petrol Pump", "Public Washroom", "Other"
   ]
 };
 
@@ -1356,10 +1356,274 @@ function downloadSheetPreviewCSV() {
   downloadBlob(rows.join("\n"), `sheet_preview_${dateTag}.csv`, "text/csv");
 }
 
-// Remove old summary tables — no longer used
+// ============================================================
+// CROSS-TAB SUMMARY TABLE
+// Final Status × Category, with % row and Commercials breakdown
+// Has its own independent filters + date range
+// ============================================================
+
+function getSummaryFilters() {
+  return {
+    NM:       document.getElementById("stNM")?.value       || "",
+    MM:       document.getElementById("stMM")?.value       || "",
+    dateFrom: document.getElementById("stDateFrom")?.value || "",
+    dateTo:   document.getElementById("stDateTo")?.value   || "",
+  };
+}
+
+function getSummaryFilteredData() {
+  const sf = getSummaryFilters();
+  const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
+  const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
+
+  return allData.filter(row => {
+    if (sf.NM && row.NM !== sf.NM) return false;
+    if (sf.MM && row.MM !== sf.MM) return false;
+    if (from || to) {
+      const ts = parseTimestamp(row["Timestamp"]);
+      if (!ts) return false;
+      if (from && ts < from) return false;
+      if (to   && ts > to)   return false;
+    }
+    return true;
+  });
+}
+
+function populateSummaryFilters() {
+  [{ key: "NM", id: "stNM" }, { key: "MM", id: "stMM" }].forEach(f => {
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    const current = el.value;
+    const vals = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    el.innerHTML = `<option value="">${f.key}</option>` +
+      vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
+    el.value = current;
+  });
+}
+
+function applySummaryFilters() {
+  renderSummaryTables();
+}
+
+function clearSummaryFilters() {
+  ["stNM","stMM","stDateFrom","stDateTo"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  renderSummaryTables();
+}
+
 function renderSummaryTables() {
-  const c = document.getElementById("summaryTablesContainer");
-  if (c) c.innerHTML = "";
+  const container = document.getElementById("summaryTablesContainer");
+  if (!container) return;
+
+  populateSummaryFilters();
+
+  const data = getSummaryFilteredData();
+  if (!data.length) {
+    container.innerHTML = `<p style="color:#aaa;padding:12px">No data for selected filters.</p>`;
+    return;
+  }
+
+  // ─────────────────────────────────────────────
+  // ✅ FIXED STRUCTURE
+  // ─────────────────────────────────────────────
+  const FIXED_CATEGORIES = [
+    "Ladies PG",
+    "Shop",
+    "Restaurant",
+    "Gated community",
+    "Independent Builder floor",
+    "Bus Stop", 
+    "Park", 
+    "Petrol Pump", 
+    "Public Washroom", 
+    "Other"
+  ];
+
+  const FIXED_FINAL_STATUSES = [
+    "Total in funnel",
+    "To be reactivated",
+    "Cold",
+    "Dropped off",
+    "Places Finalised",
+    "Deal closed - sign pending",
+    "Deal - closed - Chairs pending",
+    "Deal closed"
+  ];
+
+  const FIXED_COMMERCIAL_BUCKETS = [
+    "2000", "2500", "3000", "3500", "4000", "others", "NA"
+  ];
+
+  const allCats = FIXED_CATEGORIES;
+  const allStatuses = FIXED_FINAL_STATUSES;
+
+  // ─────────────────────────────────────────────
+  // ✅ NORMALIZERS
+  // ─────────────────────────────────────────────
+  const normalizeCategory = (cat) => {
+    if (cat === "Apartment") return "Independent Builder floor";
+    if (cat === "Restaurant") return "Restaurant";
+    return cat;
+  };
+
+  const normalizeCommercial = (val) => {
+    if (!val) return "NA";
+    val = String(val).trim();
+
+    if (["2000","2500","3000","3500","4000"].includes(val)) return val;
+    if (val.toLowerCase() === "na") return "NA";
+
+    return "others";
+  };
+
+  // ─────────────────────────────────────────────
+  // ✅ COUNT HELPER (ZERO SAFE)
+  // ─────────────────────────────────────────────
+  const countByCat = (rows) => {
+    const c = {};
+    allCats.forEach(cat => {
+      c[cat] = rows.filter(r => normalizeCategory(r.Category) === cat).length || 0;
+    });
+    return c;
+  };
+
+  // ─────────────────────────────────────────────
+  // ✅ HEADER
+  // ─────────────────────────────────────────────
+  const headerCols = `<th>Final Status</th><th>Total</th>${
+    allCats.map(c => `<th>${escHtml(c)}</th>`).join("")
+  }`;
+
+  // ─────────────────────────────────────────────
+  // ✅ STATUS ROWS (FORCED)
+  // ─────────────────────────────────────────────
+  const statusRows = allStatuses.map(status => {
+    let rows;
+
+    if (status === "Total in funnel") {
+      rows = data;
+    } else if (status === "Places Finalised") {
+      const finalisedRows = data.filter(r =>
+        ["Deal closed", "Deal closed - sign pending", "Deal - closed - Chairs pending"].includes(r["Final Status"])
+      );
+
+      const totalRows = data.length;
+
+      const pct = (num, denom) => {
+        if (!denom) return "0 (0%)";
+        return `${num} (${(num / denom * 100).toFixed(1)}%)`;
+      };
+
+      const cats = countByCat(finalisedRows);
+
+      return `<tr>
+        <td>${escHtml(status)}</td>
+        <td><b>${pct(finalisedRows.length, totalRows)}</b></td>
+        ${allCats.map(c => {
+          const catTotal = data.filter(r => normalizeCategory(r.Category) === c).length;
+          return `<td>${pct(cats[c], catTotal)}</td>`;
+        }).join("")}
+      </tr>`;
+    } else {
+      rows = data.filter(r => r["Final Status"] === status);
+    }
+
+    const cats = countByCat(rows);
+
+    return `<tr>
+      <td>${escHtml(status)}</td>
+      <td><b>${rows.length}</b></td>
+      ${allCats.map(c => `<td>${cats[c]}</td>`).join("")}
+    </tr>`;
+  }).join("");
+
+  // ─────────────────────────────────────────────
+  // ✅ SECTION 1
+  // ─────────────────────────────────────────────
+  const section1 = `
+    <div class="summary-block">
+      <div class="summary-block-header">
+        <h4 class="summary-block-title">Final Status × Category</h4>
+        <button class="summary-dl-btn" onclick="downloadSummaryTable('stMainTable','final_status_x_category')">⬇ CSV</button>
+      </div>
+      <div class="summary-table-wrapper">
+        <table class="summary-table" id="stMainTable">
+          <thead><tr>${headerCols}</tr></thead>
+          <tbody>${statusRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // ─────────────────────────────────────────────
+  // ✅ SECTION 2: COMMERCIALS (FIXED BUCKETS)
+  // ─────────────────────────────────────────────
+  const closureTypes = ["Resting + Washroom", "Resting"];
+
+  const commercialRows = closureTypes.map(closureType => {
+    const closureRows = data.filter(r => r["Closure type"] === closureType);
+
+    const headerRow = `<tr class="summary-closure-header">
+      <td colspan="${2 + allCats.length}">
+        <b>${escHtml(closureType)}</b>
+        <span style="color:#888;margin-left:8px">(${closureRows.length} total)</span>
+      </td>
+    </tr>`;
+
+    const valueRows = FIXED_COMMERCIAL_BUCKETS.map(val => {
+      const valRows = closureRows.filter(r => {
+        const raw = r["Closure commercial (Ex. 2000, 4000 etc)"] || r["Closure commercial"];
+        return normalizeCommercial(raw) === val;
+      });
+
+      const cats = countByCat(valRows);
+
+      return `<tr>
+        <td style="padding-left:16px">${val}</td>
+        <td>${valRows.length}</td>
+        ${allCats.map(c => `<td>${cats[c]}</td>`).join("")}
+      </tr>`;
+    }).join("");
+
+    const subtotalCats = countByCat(closureRows);
+
+    const subtotalRow = `<tr style="background:#f5f5f5">
+      <td><i>Subtotal</i></td>
+      <td>${closureRows.length}</td>
+      ${allCats.map(c => `<td>${subtotalCats[c]}</td>`).join("")}
+    </tr>`;
+
+    return headerRow + valueRows + subtotalRow;
+  }).join("");
+
+  const section2 = `
+    <div class="summary-block" style="margin-top:24px">
+      <div class="summary-block-header">
+        <h4 class="summary-block-title">Commercials × Property Type</h4>
+        <button class="summary-dl-btn" onclick="downloadSummaryTable('stCommTable','commercials_x_property_type')">⬇ CSV</button>
+      </div>
+      <div class="summary-table-wrapper">
+        <table class="summary-table" id="stCommTable">
+          <thead>
+            <tr>${headerCols.replace("Final Status","Closure Type / Value")}</tr>
+          </thead>
+          <tbody>${commercialRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  container.innerHTML = section1 + section2;
+}
+// Download any summary table by its DOM id
+function downloadSummaryTable(tableId, filename) {
+  const table = document.getElementById(tableId);
+  if (!table) { alert("Table not found"); return; }
+  const rows = [...table.querySelectorAll("tr")].map(tr =>
+    [...tr.querySelectorAll("th,td")].map(td => `"${td.innerText.replace(/"/g,'""')}"`).join(",")
+  );
+  const dateTag = new Date().toISOString().slice(0,10);
+  downloadBlob(rows.join("\n"), `${filename}_${dateTag}.csv`, "text/csv");
 }
 
 function refreshData() { loadData(); loadExtraLayers(); }
