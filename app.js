@@ -599,9 +599,8 @@ async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
   const newRow = {
-    "Lat":       parseFloat(lat),
-    "Long":      parseFloat(lng),
-    "Timestamp": formatTimestamp(new Date())
+    "Lat":  parseFloat(lat),
+    "Long": parseFloat(lng)
   };
 
   ADD_POINT_FIELDS.forEach(f => {
@@ -954,7 +953,15 @@ function fixMissingNM() {
       }
     }
   });
-  updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
+  updated.forEach(r => {
+    const payload = {
+      _rowIndex: r._rowIndex,
+      NM:        r.NM,
+      MM:        r.MM,
+      "NM Id":   r["NM Id"]
+    };
+    fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(payload) });
+  });
   alert(`✅ Updated ${updated.length} rows`);
 }
 
