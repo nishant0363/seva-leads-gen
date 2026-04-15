@@ -23,12 +23,12 @@ let centroidMarkers  = [];
 
 // ── Layer visibility state (legend toggles) ─────────────────
 const layerVisible = {
-  hoods:     true,
+  hoods:      true,
   properties: true,
-  hotspots:  true,
-  demand:    true,
-  idle:      true,
-  centroids: true
+  hotspots:   true,
+  demand:     true,
+  idle:       true,
+  centroids:  true
 };
 
 console.log("🚀 App initializing...");
@@ -48,8 +48,7 @@ async function init() {
   await loadData();
   await loadExtraLayers();
 
-  setInterval(loadData, 30000);
-  setInterval(loadExtraLayers, 60000);
+  // ── NO auto-refresh intervals — manual only ──────────────
 
   initMapSearch();
 
@@ -110,9 +109,9 @@ function buildLegend() {
 
 function toggleLayer(key) {
   layerVisible[key] = !layerVisible[key];
-  const eye = document.getElementById("eye_" + key);
+  const eye  = document.getElementById("eye_" + key);
   const item = document.getElementById("legend_" + key);
-  if (eye) eye.textContent = layerVisible[key] ? "👁" : "🚫";
+  if (eye)  eye.textContent  = layerVisible[key] ? "👁" : "🚫";
   if (item) item.style.opacity = layerVisible[key] ? "1" : "0.4";
 
   if (key === "hoods") {
@@ -153,7 +152,7 @@ async function loadExtraLayers() {
 async function loadLayer(url, name, renderFn) {
   if (!url) { console.warn(`⚠️ No URL configured for ${name}`); return; }
   try {
-    const res = await fetch(url + "?t=" + Date.now());
+    const res  = await fetch(url + "?t=" + Date.now());
     const data = await res.json();
     console.log(`✅ ${name}: ${data.length} rows`);
     renderFn(data);
@@ -192,25 +191,14 @@ function dotIcon(color) {
 }
 
 // Scaled dot icon — size and color intensity vary with value.
-// value    : the data value for this point (e.g. num_points, idle_min)
-// min/max  : dataset range for normalization
-// hLow/hHigh : hue for low and high ends (0–360). Same hue = monochromatic gradient.
-// Returns an L.divIcon with radius 6–28px and lightness 75%→25% (light→dark).
 function scaledDotIcon(value, min, max, hLow, hHigh) {
   const MIN_R = 5, MAX_R = 22;
-
-  // Normalize 0–1, guard against flat datasets
   const t = (max > min) ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
-
   const r = Math.round(MIN_R + t * (MAX_R - MIN_R));
-
-  // Interpolate hue and lightness
   const hue  = Math.round(hLow + t * (hHigh - hLow));
   const sat  = 85;
-  const lite = Math.round(72 - t * 47); // 72% (light) → 25% (dark)
+  const lite = Math.round(72 - t * 47);
   const color = `hsl(${hue},${sat}%,${lite}%)`;
-
-  // Border darkens with intensity for contrast
   const borderAlpha = (0.2 + t * 0.5).toFixed(2);
 
   return L.divIcon({
@@ -229,11 +217,9 @@ function scaledDotIcon(value, min, max, hLow, hHigh) {
 }
 
 // ── NM/MM lookup for extra-layer rows ────────────────────────
-// Stamps _nm and _mm onto each row by doing a point-in-polygon check.
-// Called once when data first loads; results cached on the row object.
 function stampHoodInfo(rows, latKey, lngKey) {
   rows.forEach(row => {
-    if (row._nm) return; // already stamped
+    if (row._nm) return;
     const lat = parseFloat(row[latKey]), lng = parseFloat(row[lngKey]);
     if (isNaN(lat) || isNaN(lng)) return;
     const hood = assignHood({ lat, lng });
@@ -278,7 +264,6 @@ function renderDemand(data) {
   demandData = data;
   stampHoodInfo(data, "lat", "lng");
 
-  // Compute min/max of num_points across the whole dataset for scaling
   const vals = data.map(r => parseFloat(r.num_points)).filter(v => !isNaN(v));
   const minV = vals.length ? Math.min(...vals) : 0;
   const maxV = vals.length ? Math.max(...vals) : 1;
@@ -287,7 +272,6 @@ function renderDemand(data) {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const numPts = parseFloat(row.num_points) || 0;
-    // Blue gradient: hue 200 (light sky) → 220 (deep blue)
     const icon = scaledDotIcon(numPts, minV, maxV, 200, 220);
     const m = L.marker([lat, lng], { icon })
       .bindPopup(`
@@ -310,7 +294,6 @@ function renderIdle(data) {
   idleData = data;
   stampHoodInfo(data, "lat", "lng");
 
-  // Compute min/max of idle_min across dataset for scaling
   const vals = data.map(r => parseFloat(r.idle_min)).filter(v => !isNaN(v));
   const minV = vals.length ? Math.min(...vals) : 0;
   const maxV = vals.length ? Math.max(...vals) : 1;
@@ -319,7 +302,6 @@ function renderIdle(data) {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
     const idleMin = parseFloat(row.idle_min) || 0;
-    // Red gradient: hue 5 (light coral) → 0 (deep red)
     const icon = scaledDotIcon(idleMin, minV, maxV, 5, 0);
     const m = L.marker([lat, lng], { icon })
       .bindPopup(`
@@ -355,7 +337,6 @@ function renderCentroids(data) {
 }
 
 // ── Filter extra layers by NM/MM ─────────────────────────────
-// Called every time NM/MM filter changes or is cleared.
 function filterExtraLayers() {
   const sets = [
     { markerList: hotspotMarkers,  visKey: "hotspots"  },
@@ -384,20 +365,23 @@ async function loadData() {
   const url = CONFIG.API_URL + "?t=" + Date.now();
   console.log("📡 loadData() —", url);
   try {
-    const res = await fetch(url);
+    const res  = await fetch(url);
     const text = await res.text();
     const data = JSON.parse(text);
     allData = data;
     console.log(`✅ ${allData.length} rows loaded`);
+
+    // Render markers — preserve current zoom/pan, no fitBounds
     if (Object.values(activeFilters).some(v => v)) {
       filterAndRender();
     } else {
       renderMarkers();
     }
-    renderSheetPreview(allData);
-    // Re-apply sheet filters if any are active, otherwise show all
+
+    // Sheet preview — re-apply sheet filters if active
     const sfActive = Object.values(getSheetFilters()).some(v => v);
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
+
     renderSummaryTables();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
@@ -409,7 +393,6 @@ async function loadData() {
 // RENDER PROPERTY MARKERS
 // ============================================================
 function getPropertyName(row) {
-  // Primary: "Name of the property", fallback: "Name", then generic
   return row["Name of the property"] || row["Name"] || "No Name";
 }
 
@@ -432,7 +415,7 @@ function renderMarkers() {
           }
         }
       }
-      const name = getPropertyName(row);
+      const name   = getPropertyName(row);
       const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
         .bindPopup(`<b>${name}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
         .on('click', () => showDetails(row));
@@ -450,35 +433,53 @@ function renderMarkers() {
 // ============================================================
 function applyFilters() {
   activeFilters = {
-    Category:        document.getElementById("filterCategory").value,
-    Property:        document.getElementById("filterProperty").value,
-    "App status":    document.getElementById("filterAppStatus").value,
-    "Lead Status":   document.getElementById("filterLeadStatus").value,
-    "Final Status":  document.getElementById("filterFinalStatus").value,
-    NM:              document.getElementById("filterNM").value,
-    MM:              document.getElementById("filterMM").value
+    Category:       document.getElementById("filterCategory").value,
+    Property:       document.getElementById("filterProperty").value,
+    "App status":   document.getElementById("filterAppStatus").value,
+    "Lead Status":  document.getElementById("filterLeadStatus").value,
+    "Final Status": document.getElementById("filterFinalStatus").value,
+    NM:             document.getElementById("filterNM").value,
+    MM:             document.getElementById("filterMM").value,
+    dateFrom:       document.getElementById("filterDateFrom")?.value || "",
+    dateTo:         document.getElementById("filterDateTo")?.value   || "",
   };
   filterAndRender();
 }
 
 function filterAndRender() {
-  const filtered = allData.filter(row =>
-    Object.keys(activeFilters).every(key => !activeFilters[key] || row[key] === activeFilters[key])
-  );
+  const from = activeFilters.dateFrom ? new Date(activeFilters.dateFrom + "T00:00:00") : null;
+  const to   = activeFilters.dateTo   ? new Date(activeFilters.dateTo   + "T23:59:59") : null;
+
+  const filtered = allData.filter(row => {
+    // Standard column filters
+    const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
+    for (const key of colKeys) {
+      if (activeFilters[key] && row[key] !== activeFilters[key]) return false;
+    }
+    // Date range filter on Timestamp
+    if (from || to) {
+      const ts = parseTimestamp(row["Timestamp"]);
+      if (!ts) return false;
+      if (from && ts < from) return false;
+      if (to   && ts > to)   return false;
+    }
+    return true;
+  });
+
   console.log(`🔽 ${filtered.length}/${allData.length} rows match filters`);
   updateHoodVisibility();
-  renderFilteredMarkers(filtered);
+  renderFilteredMarkers(filtered, true); // fitView=true when user explicitly filters
   filterExtraLayers();
 }
 
-function renderFilteredMarkers(data) {
+function renderFilteredMarkers(data, fitView = false) {
   markers.forEach(m => map.removeLayer(m));
   markers = [];
   const bounds = [];
   data.forEach(row => {
     const lat = parseFloat(row.Lat), lng = parseFloat(row.Long);
     if (!isNaN(lat) && !isNaN(lng)) {
-      const name = getPropertyName(row);
+      const name   = getPropertyName(row);
       const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
         .bindPopup(`<b>${name}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
         .on('click', () => showDetails(row));
@@ -487,12 +488,19 @@ function renderFilteredMarkers(data) {
       bounds.push([lat, lng]);
     }
   });
-  if (bounds.length) map.fitBounds(bounds);
+  // Only zoom/pan to fit when user explicitly requests it (fitView flag)
+  // Never on background reloads — preserves the user's current map position
+  if (fitView && bounds.length) map.fitBounds(bounds);
 }
 
 function clearFilters() {
   activeFilters = {};
-  document.querySelectorAll("select").forEach(s => s.value = "");
+  // Scope to map filter bar selects only — don't touch sheet filter selects
+  document.querySelectorAll(".map-filter-bar select").forEach(s => s.value = "");
+  const fd = document.getElementById("filterDateFrom");
+  const td = document.getElementById("filterDateTo");
+  if (fd) fd.value = "";
+  if (td) td.value = "";
   updateHoodVisibility();
   renderMarkers();
   filterExtraLayers();
@@ -500,19 +508,19 @@ function clearFilters() {
 
 function populateFilters() {
   const fields = [
-    { key: "Category",       id: "filterCategory"    },
-    { key: "Property",       id: "filterProperty"    },
-    { key: "App status",     id: "filterAppStatus"   },
-    { key: "Lead Status",    id: "filterLeadStatus"  },
-    { key: "Final Status",   id: "filterFinalStatus" },
-    { key: "NM",             id: "filterNM"          },
-    { key: "MM",             id: "filterMM"          }
+    { key: "Category",      id: "filterCategory"    },
+    { key: "Property",      id: "filterProperty"    },
+    { key: "App status",    id: "filterAppStatus"   },
+    { key: "Lead Status",   id: "filterLeadStatus"  },
+    { key: "Final Status",  id: "filterFinalStatus" },
+    { key: "NM",            id: "filterNM"          },
+    { key: "MM",            id: "filterMM"          }
   ];
   fields.forEach(f => {
     const select = document.getElementById(f.id);
     if (!select) return;
     const current = select.value;
-    const values = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    const values  = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
     select.innerHTML = `<option value="">${f.key}</option>` +
       values.map(v => `<option value="${v}">${v}</option>`).join("");
     select.value = current;
@@ -523,19 +531,19 @@ function populateFilters() {
 // ADD POINT BY CLICKING MAP
 // ============================================================
 const ADD_POINT_FIELDS = [
-  { key: "Name of the property",                  label: "Property Name",      type: "text" },
-  { key: "Category",                              label: "Category",           type: "text" },
-  { key: "Sub Category",                          label: "Sub Category",       type: "text" },
-  { key: "Road",                                  label: "Road",               type: "text" },
-  { key: "Property",                              label: "Property Type",      type: "text" },
-  { key: "App status",                            label: "App Status",         type: "text" },
-  { key: "Lead Status",                           label: "Lead Status",        type: "text" },
-  { key: "Final Status",                          label: "Final Status",       type: "text" },
-  { key: "Location (Google Maps URL) / Map Code", label: "Maps Link / Plus Code", type: "url" },
-  { key: "Contact Name",                          label: "Contact Name",       type: "text" },
-  { key: "Contact number",                        label: "Contact Number",     type: "tel"  },
-  { key: "Comment",                               label: "Comment",            type: "text" },
-  { key: "Restroom ID",                           label: "Restroom ID",        type: "text" },
+  { key: "Name of the property",                  label: "Property Name",         type: "text" },
+  { key: "Category",                              label: "Category",              type: "text" },
+  { key: "Sub Category",                          label: "Sub Category",          type: "text" },
+  { key: "Road",                                  label: "Road",                  type: "text" },
+  { key: "Property",                              label: "Property Type",         type: "text" },
+  { key: "App status",                            label: "App Status",            type: "text" },
+  { key: "Lead Status",                           label: "Lead Status",           type: "text" },
+  { key: "Final Status",                          label: "Final Status",          type: "text" },
+  { key: "Location (Google Maps URL) / Map Code", label: "Maps Link / Plus Code", type: "url"  },
+  { key: "Contact Name",                          label: "Contact Name",          type: "text" },
+  { key: "Contact number",                        label: "Contact Number",        type: "tel"  },
+  { key: "Comment",                               label: "Comment",               type: "text" },
+  { key: "Restroom ID",                           label: "Restroom ID",           type: "text" },
 ];
 
 function toggleAddPointMode() {
@@ -591,9 +599,9 @@ async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
   const newRow = {
-    "Lat": parseFloat(lat),
-    "Long": parseFloat(lng),
-    "Timestamp": formatTimestamp(new Date())   // ← auto-stamp on add
+    "Lat":       parseFloat(lat),
+    "Long":      parseFloat(lng),
+    "Timestamp": formatTimestamp(new Date())
   };
 
   ADD_POINT_FIELDS.forEach(f => {
@@ -611,7 +619,7 @@ async function submitAddPoint() {
   }
 
   try {
-    const res = await fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(newRow) });
+    const res  = await fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(newRow) });
     const json = await res.json();
     if (json.success) {
       alert(`✅ Point added\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}`);
@@ -631,10 +639,23 @@ async function submitAddPoint() {
 function getFilteredData() {
   const hasFilter = Object.values(activeFilters).some(v => v);
   if (!hasFilter) return allData;
-  return allData.filter(row =>
-    Object.keys(activeFilters).every(key => !activeFilters[key] || row[key] === activeFilters[key])
-  );
+  const from = activeFilters.dateFrom ? new Date(activeFilters.dateFrom + "T00:00:00") : null;
+  const to   = activeFilters.dateTo   ? new Date(activeFilters.dateTo   + "T23:59:59") : null;
+  return allData.filter(row => {
+    const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
+    for (const key of colKeys) {
+      if (activeFilters[key] && row[key] !== activeFilters[key]) return false;
+    }
+    if (from || to) {
+      const ts = parseTimestamp(row["Timestamp"]);
+      if (!ts) return false;
+      if (from && ts < from) return false;
+      if (to   && ts > to)   return false;
+    }
+    return true;
+  });
 }
+
 function getFilteredNMs() { return [...new Set(getFilteredData().map(r => r.NM).filter(Boolean))]; }
 function getFilteredMMs() { return [...new Set(getFilteredData().map(r => r.MM).filter(Boolean))]; }
 function hoodsByNM(nmList) { return hoods.filter(h => nmList.includes(h.nano_market)); }
@@ -707,9 +728,9 @@ function hoodsToCsvWkt(hoodList, nameField) {
   const rows = hoodList.map(h => [
     `"${geometryToWkt(h.geometry)}"`,
     `"${h[nameField] || h.nano_market || h.micro_market || ""}"`,
-    `"${h.nano_market || ""}"`,
+    `"${h.nano_market  || ""}"`,
     `"${h.micro_market || ""}"`,
-    `"${h.hood_id || ""}"`
+    `"${h.hood_id      || ""}"`
   ].join(","));
   return ["WKT,name,nm,mm,hood_id", ...rows].join("\n");
 }
@@ -722,9 +743,9 @@ function pointsToCsvWkt(data) {
       return [
         `"POINT(${lng} ${lat})"`,
         `"${getPropertyName(row).replace(/"/g,'""')}"`,
-        `"${row.Category || ""}"`,
-        `"${row.NM || ""}"`,
-        `"${row.MM || ""}"`,
+        `"${row.Category        || ""}"`,
+        `"${row.NM              || ""}"`,
+        `"${row.MM              || ""}"`,
         `"${(row.Road || "").replace(/"/g,'""')}"`,
         `"${row["Final Status"] || ""}"`,
         lat, lng
@@ -735,8 +756,8 @@ function pointsToCsvWkt(data) {
 
 function downloadBlob(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
 }
@@ -784,9 +805,7 @@ function downloadLayerCSV(type) {
 }
 
 // ── Extra layer downloads ────────────────────────────────────
-
 function extraLayerToCsvWkt(rows, latKey, lngKey, extraCols) {
-  const label = activeFilters.NM || activeFilters.MM || "filtered";
   const headers = ["WKT", "nm", "mm", ...extraCols];
   const csvRows = rows
     .filter(r => !isNaN(parseFloat(r[latKey])) && !isNaN(parseFloat(r[lngKey])))
@@ -852,32 +871,24 @@ async function resolveCoords(input) {
   if (!input || !input.toString().trim()) throw new Error("Empty input");
   const raw = input.toString().trim();
   console.log(`🔍 resolveCoords() — raw input: "${raw}"`);
-  console.log(`🔍 resolveCoords() — isURL: ${/^https?:\/\//i.test(raw)}, hasDirectCoords: ${/@-?\d+\.\d+,-?\d+\.\d+/.test(raw)}`);
 
   const directMatch = raw.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
   if (directMatch) {
-    console.log(`✅ resolveCoords() — direct coords match: ${directMatch[1]}, ${directMatch[2]}`);
     return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
   }
 
   const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(raw);
-  console.log(`🌐 resolveCoords() — calling backend: ${backendUrl}`);
-  const res = await fetch(backendUrl);
-  console.log(`🌐 resolveCoords() — backend HTTP status: ${res.status}`);
+  const res  = await fetch(backendUrl);
   if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
 
   const text = await res.text();
-  console.log(`🌐 resolveCoords() — raw backend response: ${text}`);
   const json = JSON.parse(text);
-  console.log(`🌐 resolveCoords() — parsed response:`, json);
 
   if (json.error) throw new Error(`Backend error: ${json.error}`);
   if (json.lat != null && json.lng != null) {
-    console.log(`✅ resolveCoords() — got lat/lng from backend: ${json.lat}, ${json.lng}`);
     return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
   }
 
-  console.warn(`⚠️ resolveCoords() — no lat/lng in response, trying url: "${json.url}"`);
   const expandedUrl = json.url || "";
   const d3Match = expandedUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
   if (d3Match) return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
@@ -890,32 +901,17 @@ async function resolveCoords(input) {
 async function fillLatLong() {
   let updated = [], skippedCount = 0, failedCount = 0;
   console.log(`🌍 fillLatLong() — starting, total rows: ${allData.length}`);
-  console.log(`🌍 fillLatLong() — looking for column: "${LOCATION_COL}"`);
-
-  if (allData.length > 0) {
-    const keys = Object.keys(allData[0]);
-    console.log(`🌍 fillLatLong() — column match found: ${keys.includes(LOCATION_COL)}`);
-    console.log(`🌍 fillLatLong() — all column keys:`, keys);
-  }
 
   for (let row of allData) {
     const locationInput = row[LOCATION_COL];
-    if (!locationInput || !locationInput.toString().trim()) {
-      console.log(`⏭️ _rowIndex:${row._rowIndex} — skipped (no location value)`);
-      skippedCount++; continue;
-    }
-    const latOk = row.Lat && !isNaN(parseFloat(row.Lat)) && parseFloat(row.Lat) !== 0;
+    if (!locationInput || !locationInput.toString().trim()) { skippedCount++; continue; }
+    const latOk = row.Lat  && !isNaN(parseFloat(row.Lat))  && parseFloat(row.Lat)  !== 0;
     const lngOk = row.Long && !isNaN(parseFloat(row.Long)) && parseFloat(row.Long) !== 0;
-    if (latOk && lngOk) {
-      console.log(`⏭️ _rowIndex:${row._rowIndex} — skipped (already has coords: ${row.Lat}, ${row.Long})`);
-      skippedCount++; continue;
-    }
-    console.log(`🔄 _rowIndex:${row._rowIndex} — processing: "${locationInput}"`);
+    if (latOk && lngOk) { skippedCount++; continue; }
     try {
       const coords = await resolveCoords(locationInput);
       row.Lat = coords.lat; row.Long = coords.lng;
       updated.push(row);
-      console.log(`✅ _rowIndex:${row._rowIndex} — resolved: ${coords.lat}, ${coords.lng}`);
     } catch (e) {
       failedCount++;
       console.error(`❌ _rowIndex:${row._rowIndex} — failed for "${locationInput}": ${e.message}`);
@@ -1009,7 +1005,6 @@ function getCategoryIcon(category) {
 // ============================================================
 // DETAILS + SAVE
 // ============================================================
-
 function showHoodDetails(h) {
   document.getElementById("detailsTable").innerHTML = `
     <tr><td><b>NM</b></td><td>${h.nano_market}</td></tr>
@@ -1019,8 +1014,6 @@ function showHoodDetails(h) {
   `;
 }
 
-// Columns that get a <select> dropdown in the details panel.
-// Add/remove options here as your sheet values change.
 const DETAIL_DROPDOWNS = {
   "Property": [
     "Private", "Public"
@@ -1036,9 +1029,9 @@ const DETAIL_DROPDOWNS = {
     "6. Dropped"
   ],
   "Final Status": [
-    "Dropped off", "Active", "Cold", "Deal closed", 
+    "Dropped off", "Active", "Cold", "Deal closed",
     "Deal closed - sign pending", "No deal required",
-    "To be reactivated", "Deal - closed - Chairs pending", 
+    "To be reactivated", "Deal - closed - Chairs pending",
     "Dropped off after launch"
   ],
   "Closure type": [
@@ -1060,15 +1053,12 @@ function showDetails(row) {
 
   Object.keys(row).forEach(key => {
     if (key === "_rowIndex") return;
-
     const val = row[key] != null ? row[key] : "";
 
     if (DETAIL_DROPDOWNS[key]) {
-      // Build a <select> with all options; pre-select current value
       const options = DETAIL_DROPDOWNS[key].map(opt =>
         `<option value="${escHtml(opt)}" ${opt === String(val) ? "selected" : ""}>${escHtml(opt)}</option>`
       ).join("");
-      // Add current value as an option if it's not in the predefined list
       const extraOption = val && !DETAIL_DROPDOWNS[key].includes(String(val))
         ? `<option value="${escHtml(val)}" selected>${escHtml(val)}</option>`
         : "";
@@ -1091,7 +1081,6 @@ function showDetails(row) {
     }
   });
 
-  // Inline Save button at the bottom of the details table
   table.innerHTML += `
     <tr>
       <td colspan="2" style="padding-top:10px;border-top:1px solid #eee">
@@ -1102,7 +1091,7 @@ function showDetails(row) {
     </tr>`;
 }
 
-// Returns timestamp string in Google Sheets / GForm format: "M/D/YYYY HH:MM:SS"
+// Returns timestamp string in "M/D/YYYY HH:MM:SS" format (IST wall-clock)
 function formatTimestamp(date) {
   const d = date;
   return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()} ` +
@@ -1112,13 +1101,11 @@ function formatTimestamp(date) {
 function saveCurrent() {
   if (!currentRow) return;
 
-  // Read contenteditable cells
   document.querySelectorAll("[contenteditable]").forEach(cell => {
     const key = cell.dataset.key;
     if (key) currentRow[key] = cell.innerText.trim();
   });
 
-  // Read dropdown selects in the details table
   document.querySelectorAll(".detail-select").forEach(sel => {
     const key = sel.dataset.key;
     if (key) currentRow[key] = sel.value;
@@ -1126,7 +1113,6 @@ function saveCurrent() {
 
   if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing"); return; }
 
-  // Always update Timestamp to now on every manual save
   currentRow["Timestamp"] = formatTimestamp(new Date());
 
   fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
@@ -1138,107 +1124,74 @@ function saveCurrent() {
 }
 
 // ============================================================
-// SHEET PREVIEW + DATE FILTER + SUMMARY TABLES
+// TIMESTAMP PARSING — Sheet stores IST directly as M/D/YYYY H:MM:SS
+// No UTC shifting needed. Parse as local time only.
 // ============================================================
-
-// Parse a timestamp value from the sheet — handles Date objects, strings, numbers
-// Explicitly handles:
-//   "M/D/YYYY H:MM:SS"  — plain text written by this app (already IST)
-//   "2026-04-09T19:18:24.000Z" — UTC ISO string from Sheets Date cells (needs +5:30)
-//   Google Sheets serial number — days since 1899-12-30 (UTC, needs +5:30)
 function parseTimestamp(val) {
   if (!val || val === "") return null;
-  if (val instanceof Date) return isNaN(val.getTime()) ? null : shiftToIST(val);
 
-  // Google Sheets serial number
+  // Already a Date object
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+
+  // Google Sheets serial number (days since 1899-12-30)
+  // Rare — only if cell is formatted as Number instead of Date/Text
   if (typeof val === "number") {
-    return shiftToIST(new Date((val - 25569) * 86400000));
+    const d = new Date((val - 25569) * 86400000);
+    return isNaN(d.getTime()) ? null : d;
   }
 
   const str = val.toString().trim();
 
-  // "M/D/YYYY H:MM:SS" — written by this app, already in IST, construct as local time
+  // ── PRIMARY FORMAT ──
+  // "M/D/YYYY H:MM:SS" written by formatTimestamp() — always IST, parse as local
   const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
   if (slashMatch) {
     const [, m, d, y, hr, min, sec] = slashMatch;
-    return new Date(+y, +m - 1, +d, +hr, +min, +sec); // local time, no shift needed
+    return new Date(+y, +m - 1, +d, +hr, +min, +sec);
   }
 
-  // ISO 8601 with Z or +offset — comes from Sheets Date cells, stored as UTC, shift to IST
-  if (str.includes("T") && (str.endsWith("Z") || str.includes("+"))) {
-    const utc = new Date(str);
-    return isNaN(utc.getTime()) ? null : shiftToIST(utc);
-  }
-
-  // Fallback
-  const d = new Date(str);
-  return isNaN(d.getTime()) ? null : d;
+  // ── FALLBACK ──
+  // Plain date string without time e.g. "2026-04-09"
+  const fallback = new Date(str);
+  return isNaN(fallback.getTime()) ? null : fallback;
 }
 
-// Add IST offset (+5:30) to a UTC Date, returning a new Date in IST wall-clock time
-function shiftToIST(utcDate) {
-  return new Date(utcDate.getTime() + 5.5 * 60 * 60 * 1000);
-}
-
-// Format a timestamp value for display in the preview table — always shows IST
+// Format a timestamp value for display — shows the parsed local time
 function formatTsDisplay(val) {
   if (!val || val === "") return "";
   const d = parseTimestamp(val);
   if (!d) return String(val); // unparseable — show raw
-  // Format as "D/M/YYYY HH:MM:SS" for display
   return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ` +
     `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-}
-
-// Filter allData by the date range pickers
-function getDateFilteredData() {
-  const fromVal = document.getElementById("dateFrom")?.value;
-  const toVal   = document.getElementById("dateTo")?.value;
-  if (!fromVal && !toVal) return allData;
-
-  const from = fromVal ? new Date(fromVal + "T00:00:00") : null;
-  const to   = toVal   ? new Date(toVal   + "T23:59:59") : null;
-
-  return allData.filter(row => {
-    const ts = parseTimestamp(row["Timestamp"]);
-    if (!ts) return false;
-    if (from && ts < from) return false;
-    if (to   && ts > to)   return false;
-    return true;
-  });
 }
 
 // ============================================================
 // SHEET PREVIEW — independent filters + totals row
 // ============================================================
-
-// Collect current sheet filter values from the sheet filter bar
 function getSheetFilters() {
   return {
-    Category:       document.getElementById("sfCategory")?.value      || "",
-    Property:       document.getElementById("sfProperty")?.value      || "",
-    "App status":   document.getElementById("sfAppStatus")?.value     || "",
-    "Lead Status":  document.getElementById("sfLeadStatus")?.value    || "",
-    "Final Status": document.getElementById("sfFinalStatus")?.value   || "",
-    NM:             document.getElementById("sfNM")?.value            || "",
-    MM:             document.getElementById("sfMM")?.value            || "",
-    dateFrom:       document.getElementById("sfDateFrom")?.value      || "",
-    dateTo:         document.getElementById("sfDateTo")?.value        || "",
+    Category:       document.getElementById("sfCategory")?.value    || "",
+    Property:       document.getElementById("sfProperty")?.value    || "",
+    "App status":   document.getElementById("sfAppStatus")?.value   || "",
+    "Lead Status":  document.getElementById("sfLeadStatus")?.value  || "",
+    "Final Status": document.getElementById("sfFinalStatus")?.value || "",
+    NM:             document.getElementById("sfNM")?.value          || "",
+    MM:             document.getElementById("sfMM")?.value          || "",
+    dateFrom:       document.getElementById("sfDateFrom")?.value    || "",
+    dateTo:         document.getElementById("sfDateTo")?.value      || "",
   };
 }
 
 function getSheetFilteredData() {
-  const sf = getSheetFilters();
+  const sf   = getSheetFilters();
   const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
   const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
 
   return allData.filter(row => {
-    // Standard column filters
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
     for (const key of colKeys) {
       if (sf[key] && row[key] !== sf[key]) return false;
     }
-    // Timestamp range
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
@@ -1250,8 +1203,7 @@ function getSheetFilteredData() {
 }
 
 function applySheetFilters() {
-  const data = getSheetFilteredData();
-  renderSheetPreview(data);
+  renderSheetPreview(getSheetFilteredData());
 }
 
 function clearSheetFilters() {
@@ -1266,26 +1218,26 @@ function clearSheetFilters() {
   renderSheetPreview(allData);
 }
 
-// Keep backward-compat aliases used by loadData
-function applyDateFilter()  { applySheetFilters(); }
+// Backward-compat aliases
+function applyDateFilter() { applySheetFilters(); }
 function clearDateFilter()  { clearSheetFilters(); }
 
 function populateSheetFilters() {
   const fields = [
-    { key: "Category",      id: "sfCategory"     },
-    { key: "Property",      id: "sfProperty"     },
-    { key: "App status",    id: "sfAppStatus"    },
-    { key: "Lead Status",   id: "sfLeadStatus"   },
-    { key: "Final Status",  id: "sfFinalStatus"  },
-    { key: "NM",            id: "sfNM"           },
-    { key: "MM",            id: "sfMM"           },
+    { key: "Category",      id: "sfCategory"    },
+    { key: "Property",      id: "sfProperty"    },
+    { key: "App status",    id: "sfAppStatus"   },
+    { key: "Lead Status",   id: "sfLeadStatus"  },
+    { key: "Final Status",  id: "sfFinalStatus" },
+    { key: "NM",            id: "sfNM"          },
+    { key: "MM",            id: "sfMM"          },
   ];
   fields.forEach(f => {
     const el = document.getElementById(f.id);
     if (!el) return;
     const current = el.value;
-    const vals = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
-    el.innerHTML = `<option value="">${f.key}</option>` +
+    const vals    = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    el.innerHTML  = `<option value="">${f.key}</option>` +
       vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
     el.value = current;
   });
@@ -1310,17 +1262,15 @@ function renderSheetPreview(data) {
     "Contact Name", "Contact number"];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
 
-  // ── Body rows ──
   const bodyRows = data.map((row, idx) => `
     <tr data-idx="${idx}" style="cursor:pointer">
       ${availableCols.map(c => {
-        const raw = row[c] != null ? row[c] : "";
+        const raw     = row[c] != null ? row[c] : "";
         const display = c === "Timestamp" ? formatTsDisplay(row[c]) : escHtml(raw);
         return `<td title="${escHtml(String(raw))}">${display}</td>`;
       }).join("")}
     </tr>`).join("");
 
-  // ── Totals row — count of non-empty values per column ──
   const totalsRow = `<tr class="summary-total-row" style="position:sticky;bottom:0">
     ${availableCols.map((c, i) => {
       if (i === 0) return `<td><b>Total: ${data.length}</b></td>`;
@@ -1345,7 +1295,6 @@ function renderSheetPreview(data) {
   });
 }
 
-// Download the current sheet preview as CSV
 function downloadSheetPreviewCSV() {
   const table = document.getElementById("sheetPreviewTable");
   if (!table) return;
@@ -1358,10 +1307,7 @@ function downloadSheetPreviewCSV() {
 
 // ============================================================
 // CROSS-TAB SUMMARY TABLE
-// Final Status × Category, with % row and Commercials breakdown
-// Has its own independent filters + date range
 // ============================================================
-
 function getSummaryFilters() {
   return {
     NM:       document.getElementById("stNM")?.value       || "",
@@ -1372,7 +1318,7 @@ function getSummaryFilters() {
 }
 
 function getSummaryFilteredData() {
-  const sf = getSummaryFilters();
+  const sf   = getSummaryFilters();
   const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
   const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
 
@@ -1394,16 +1340,14 @@ function populateSummaryFilters() {
     const el = document.getElementById(f.id);
     if (!el) return;
     const current = el.value;
-    const vals = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
-    el.innerHTML = `<option value="">${f.key}</option>` +
+    const vals    = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
+    el.innerHTML  = `<option value="">${f.key}</option>` +
       vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
     el.value = current;
   });
 }
 
-function applySummaryFilters() {
-  renderSummaryTables();
-}
+function applySummaryFilters() { renderSummaryTables(); }
 
 function clearSummaryFilters() {
   ["stNM","stMM","stDateFrom","stDateTo"].forEach(id => {
@@ -1425,62 +1369,38 @@ function renderSummaryTables() {
     return;
   }
 
-  // ─────────────────────────────────────────────
-  // ✅ FIXED STRUCTURE
-  // ─────────────────────────────────────────────
   const FIXED_CATEGORIES = [
-    "Ladies PG",
-    "Shop",
-    "Restaurant",
-    "Gated community",
-    "Independent Builder floor",
-    "Bus Stop", 
-    "Park", 
-    "Petrol Pump", 
-    "Public Washroom", 
-    "Other"
+    "Ladies PG", "Shop", "Restaurant", "Gated community",
+    "Independent Builder floor", "Bus Stop", "Park",
+    "Petrol Pump", "Public Washroom", "Other"
   ];
 
   const FIXED_FINAL_STATUSES = [
-    "Total in funnel",
-    "To be reactivated",
-    "Cold",
-    "Dropped off",
-    "Places Finalised",
-    "Deal closed - sign pending",
-    "Deal - closed - Chairs pending",
-    "Deal closed"
+    "Total in funnel", "To be reactivated", "Cold", "Dropped off",
+    "Places Finalised", "Deal closed - sign pending",
+    "Deal - closed - Chairs pending", "Deal closed"
   ];
 
   const FIXED_COMMERCIAL_BUCKETS = [
     "2000", "2500", "3000", "3500", "4000", "others", "NA"
   ];
 
-  const allCats = FIXED_CATEGORIES;
+  const allCats     = FIXED_CATEGORIES;
   const allStatuses = FIXED_FINAL_STATUSES;
 
-  // ─────────────────────────────────────────────
-  // ✅ NORMALIZERS
-  // ─────────────────────────────────────────────
   const normalizeCategory = (cat) => {
     if (cat === "Apartment") return "Independent Builder floor";
-    if (cat === "Restaurant") return "Restaurant";
     return cat;
   };
 
   const normalizeCommercial = (val) => {
     if (!val) return "NA";
     val = String(val).trim();
-
     if (["2000","2500","3000","3500","4000"].includes(val)) return val;
     if (val.toLowerCase() === "na") return "NA";
-
     return "others";
   };
 
-  // ─────────────────────────────────────────────
-  // ✅ COUNT HELPER (ZERO SAFE)
-  // ─────────────────────────────────────────────
   const countByCat = (rows) => {
     const c = {};
     allCats.forEach(cat => {
@@ -1489,16 +1409,10 @@ function renderSummaryTables() {
     return c;
   };
 
-  // ─────────────────────────────────────────────
-  // ✅ HEADER
-  // ─────────────────────────────────────────────
   const headerCols = `<th>Final Status</th><th>Total</th>${
     allCats.map(c => `<th>${escHtml(c)}</th>`).join("")
   }`;
 
-  // ─────────────────────────────────────────────
-  // ✅ STATUS ROWS (FORCED)
-  // ─────────────────────────────────────────────
   const statusRows = allStatuses.map(status => {
     let rows;
 
@@ -1508,16 +1422,9 @@ function renderSummaryTables() {
       const finalisedRows = data.filter(r =>
         ["Deal closed", "Deal closed - sign pending", "Deal - closed - Chairs pending"].includes(r["Final Status"])
       );
-
       const totalRows = data.length;
-
-      const pct = (num, denom) => {
-        if (!denom) return "0 (0%)";
-        return `${num} (${(num / denom * 100).toFixed(1)}%)`;
-      };
-
+      const pct = (num, denom) => !denom ? "0 (0%)" : `${num} (${(num / denom * 100).toFixed(1)}%)`;
       const cats = countByCat(finalisedRows);
-
       return `<tr>
         <td>${escHtml(status)}</td>
         <td><b>${pct(finalisedRows.length, totalRows)}</b></td>
@@ -1531,7 +1438,6 @@ function renderSummaryTables() {
     }
 
     const cats = countByCat(rows);
-
     return `<tr>
       <td>${escHtml(status)}</td>
       <td><b>${rows.length}</b></td>
@@ -1539,9 +1445,6 @@ function renderSummaryTables() {
     </tr>`;
   }).join("");
 
-  // ─────────────────────────────────────────────
-  // ✅ SECTION 1
-  // ─────────────────────────────────────────────
   const section1 = `
     <div class="summary-block">
       <div class="summary-block-header">
@@ -1556,12 +1459,8 @@ function renderSummaryTables() {
       </div>
     </div>`;
 
-  // ─────────────────────────────────────────────
-  // ✅ SECTION 2: COMMERCIALS (FIXED BUCKETS)
-  // ─────────────────────────────────────────────
-  const closureTypes = ["Resting + Washroom", "Resting"];
-
-  const commercialRows = closureTypes.map(closureType => {
+  const closureTypes    = ["Resting + Washroom", "Resting"];
+  const commercialRows  = closureTypes.map(closureType => {
     const closureRows = data.filter(r => r["Closure type"] === closureType);
 
     const headerRow = `<tr class="summary-closure-header">
@@ -1576,9 +1475,7 @@ function renderSummaryTables() {
         const raw = r["Closure commercial (Ex. 2000, 4000 etc)"] || r["Closure commercial"];
         return normalizeCommercial(raw) === val;
       });
-
       const cats = countByCat(valRows);
-
       return `<tr>
         <td style="padding-left:16px">${val}</td>
         <td>${valRows.length}</td>
@@ -1587,8 +1484,7 @@ function renderSummaryTables() {
     }).join("");
 
     const subtotalCats = countByCat(closureRows);
-
-    const subtotalRow = `<tr style="background:#f5f5f5">
+    const subtotalRow  = `<tr style="background:#f5f5f5">
       <td><i>Subtotal</i></td>
       <td>${closureRows.length}</td>
       ${allCats.map(c => `<td>${subtotalCats[c]}</td>`).join("")}
@@ -1615,7 +1511,7 @@ function renderSummaryTables() {
 
   container.innerHTML = section1 + section2;
 }
-// Download any summary table by its DOM id
+
 function downloadSummaryTable(tableId, filename) {
   const table = document.getElementById(tableId);
   if (!table) { alert("Table not found"); return; }
@@ -1635,7 +1531,7 @@ let searchMarker = null;
 let searchDebounceTimer = null;
 
 function initMapSearch() {
-  const input = document.getElementById("mapSearchInput");
+  const input   = document.getElementById("mapSearchInput");
   const results = document.getElementById("mapSearchResults");
   input.addEventListener("input", () => {
     clearTimeout(searchDebounceTimer);
@@ -1656,8 +1552,8 @@ async function searchLocation(query) {
   results.innerHTML = `<div class="search-result-item" style="color:#888">Searching...</div>`;
   results.classList.add("open");
   try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
-    const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+    const url  = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1`;
+    const res  = await fetch(url, { headers: { "Accept-Language": "en" } });
     const data = await res.json();
     if (!data.length) { results.innerHTML = `<div class="search-result-item" style="color:#888">No results found</div>`; return; }
     results.innerHTML = data.map(item => {

@@ -40,6 +40,9 @@
         <select id="filterFinalStatus"><option value="">Final Status</option></select>
         <select id="filterNM"><option value="">NM</option></select>
         <select id="filterMM"><option value="">MM</option></select>
+        <!-- Add alongside other map filter selects -->
+        <input type="date" id="filterDateFrom" onchange="applyFilters()" title="From date" />
+        <input type="date" id="filterDateTo"   onchange="applyFilters()" title="To date" />
         <button class="primary" onclick="applyFilters()">Apply</button>
         <button onclick="clearFilters()">Clear</button>
       </div>
