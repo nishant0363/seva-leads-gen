@@ -118,6 +118,12 @@
           <input type="date" id="sfDateFrom" />
           <span style="color:#888;font-size:13px">to</span>
           <input type="date" id="sfDateTo" />
+          <span class="date-filter-label">📅 Signage Date:</span>
+          <input type="date" id="sfSignageFrom" onchange="applySheetFilters()" />
+          <input type="date" id="sfSignageTo"   onchange="applySheetFilters()" />
+          <span class="date-filter-label">📅 Launch Date:</span>
+          <input type="date" id="sfLaunchFrom"  onchange="applySheetFilters()" />
+          <input type="date" id="sfLaunchTo"    onchange="applySheetFilters()" />
           <button class="primary" onclick="applySheetFilters()">Apply</button>
           <button onclick="clearSheetFilters()">Clear</button>
         </div>

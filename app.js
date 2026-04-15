@@ -919,7 +919,19 @@ async function fillLatLong() {
   }
 
   console.log(`🌍 fillLatLong() — done. Updated: ${updated.length}, Skipped: ${skippedCount}, Failed: ${failedCount}`);
-  updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
+  // updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
+  updated.forEach(r => {
+  const payload = {
+    _rowIndex: r._rowIndex,
+    Lat: r.Lat,
+    Long: r.Long
+  };
+
+  fetch(CONFIG.API_URL, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  });
   alert(`✅ Updated ${updated.length} rows\n⏭️ Skipped: ${skippedCount}\n❌ Failed: ${failedCount}`);
   if (updated.length > 0) loadData();
 }
@@ -1072,6 +1084,14 @@ function showDetails(row) {
             </select>
           </td>
         </tr>`;
+    } else if (key === "Timestamp") {
+      // Timestamp is the original Google Form submission time — never editable
+      const displayVal = formatTsDisplay(val) || escHtml(String(val));
+      table.innerHTML += `
+        <tr>
+          <td>${escHtml(key)}</td>
+          <td style="background:#f5f5f5;color:#888;font-style:italic" title="Original form submission time — read only">${displayVal}</td>
+        </tr>`;
     } else {
       table.innerHTML += `
         <tr>
@@ -1091,16 +1111,24 @@ function showDetails(row) {
     </tr>`;
 }
 
-// Returns timestamp string in "M/D/YYYY HH:MM:SS" format (IST wall-clock)
+// Returns timestamp string in "M/D/YYYY HH:MM:SS" format, always in IST (UTC+5:30).
+// Uses explicit offset arithmetic so it works correctly regardless of the browser's
+// local timezone — prevents UTC timestamps appearing when the user's system is UTC.
 function formatTimestamp(date) {
-  const d = date;
-  return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()} ` +
-    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  // Shift to IST wall-clock time
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  // Use UTC getters on the shifted date to read IST values
+  return `${ist.getUTCMonth()+1}/${ist.getUTCDate()}/${ist.getUTCFullYear()} ` +
+    `${String(ist.getUTCHours()).padStart(2,'0')}:${String(ist.getUTCMinutes()).padStart(2,'0')}:${String(ist.getUTCSeconds()).padStart(2,'0')}`;
 }
 
 function saveCurrent() {
   if (!currentRow) return;
 
+  // ── Snapshot old App status BEFORE overwriting with new values ───────────
+  const prevAppStatus = String(currentRow["App status"] || "").trim();
+  const prevFinalStatus = String(currentRow["Final Status"] || "").trim();
+  // ── Read all editable cells into currentRow ──────────────────────────────
   document.querySelectorAll("[contenteditable]").forEach(cell => {
     const key = cell.dataset.key;
     if (key) currentRow[key] = cell.innerText.trim();
@@ -1111,16 +1139,58 @@ function saveCurrent() {
     if (key) currentRow[key] = sel.value;
   });
 
-  if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing"); return; }
+  if (!currentRow._rowIndex) { alert("\u274c Cannot save \u2014 row index missing, try refreshing"); return; }
 
-  currentRow["Timestamp"] = formatTimestamp(new Date());
+  const nowIST = formatTimestamp(new Date());
 
-  fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(currentRow) })
+  // // ── Rule 1: Signage date ─────────────────────────────────────────────────
+  // // Fill ONLY when: Signage date is currently empty AND Lead Status is a deal-closed state
+  // const SIGNAGE_STATUSES = ["Deal closed", "Deal - closed - Chairs pending"];
+  // const leadStatus   = String(currentRow["Lead Status"] || "").trim();
+  // const signageEmpty = !currentRow["Signage date"] || String(currentRow["Signage date"]).trim() === "";
+  // if (signageEmpty && SIGNAGE_STATUSES.includes(leadStatus)) {
+  //   currentRow["Signage date"] = nowIST;
+  //   console.log("\ud83d\udcc5 Signage date auto-filled:", nowIST, "(Lead Status:", leadStatus + ")");
+  // }
+
+  // ── Rule 1: Launch date ──────────────────────────────────────────────────
+  // Fill when App status is being changed TO "Active" (was not "Active" before)
+  const newAppStatus = String(currentRow["App status"] || "").trim();
+  if (newAppStatus === "Active" && prevAppStatus !== "Active") {
+    currentRow["Launch date"] = nowIST;
+    console.log("\ud83d\ude80 Launch date auto-filled:", nowIST, "(App status changed to Active)");
+  }
+
+  // ── Rule 2: Signage date ──────────────────────────────────────────────────
+  // Fill when Final Status changes to any "closed" state
+
+  const CLOSED_STATUSES = [
+    "Deal closed",
+    "Deal - closed - Chairs pending"
+  ];
+
+  const newFinalStatus = String(currentRow["Final Status"] || "").trim();
+
+  if (
+    CLOSED_STATUSES.includes(newFinalStatus) &&
+    !CLOSED_STATUSES.includes(prevFinalStatus)
+  ) {
+    currentRow["Signage date"] = nowIST;
+    console.log("📅 Signage date auto-filled:", nowIST, "(Final Status changed to closed state)");
+  }
+
+  // ── Timestamp column is NEVER written back ───────────────────────────────
+  // It reflects the original Google Form submission time.
+  // Build a clean payload that explicitly excludes Timestamp.
+  const savePayload = Object.assign({}, currentRow);
+  delete savePayload["Timestamp"];
+
+  fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(savePayload) })
     .then(() => {
-      alert("✅ Saved");
+      alert("\u2705 Saved");
       showDetails(currentRow);
     })
-    .catch(err => alert("❌ Save failed: " + err.message));
+    .catch(err => alert("\u274c Save failed: " + err.message));
 }
 
 // ============================================================
@@ -1142,6 +1212,13 @@ function parseTimestamp(val) {
 
   const str = val.toString().trim();
 
+  // ── ISO 8601 / UTC strings ──
+  // e.g. "2026-04-14T12:26:08.000Z" — treat as UTC, display in IST
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   // ── PRIMARY FORMAT ──
   // "M/D/YYYY H:MM:SS" written by formatTimestamp() — always IST, parse as local
   const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
@@ -1156,13 +1233,24 @@ function parseTimestamp(val) {
   return isNaN(fallback.getTime()) ? null : fallback;
 }
 
-// Format a timestamp value for display — shows the parsed local time
+// Format a timestamp value for display — always shows IST time
 function formatTsDisplay(val) {
   if (!val || val === "") return "";
   const d = parseTimestamp(val);
   if (!d) return String(val); // unparseable — show raw
-  return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ` +
-    `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+
+  // For the primary M/D/YYYY format (already IST), use local getters directly
+  const str = val.toString().trim();
+  const isSlashFormat = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/.test(str);
+  if (isSlashFormat) {
+    return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ` +
+      `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  }
+
+  // For ISO/UTC strings, shift to IST (UTC+5:30) before displaying
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+  return `${ist.getUTCDate()}/${ist.getUTCMonth()+1}/${ist.getUTCFullYear()} ` +
+    `${String(ist.getUTCHours()).padStart(2,'0')}:${String(ist.getUTCMinutes()).padStart(2,'0')}:${String(ist.getUTCSeconds()).padStart(2,'0')}`;
 }
 
 // ============================================================
@@ -1170,33 +1258,56 @@ function formatTsDisplay(val) {
 // ============================================================
 function getSheetFilters() {
   return {
-    Category:       document.getElementById("sfCategory")?.value    || "",
-    Property:       document.getElementById("sfProperty")?.value    || "",
-    "App status":   document.getElementById("sfAppStatus")?.value   || "",
-    "Lead Status":  document.getElementById("sfLeadStatus")?.value  || "",
-    "Final Status": document.getElementById("sfFinalStatus")?.value || "",
-    NM:             document.getElementById("sfNM")?.value          || "",
-    MM:             document.getElementById("sfMM")?.value          || "",
-    dateFrom:       document.getElementById("sfDateFrom")?.value    || "",
-    dateTo:         document.getElementById("sfDateTo")?.value      || "",
+    Category:       document.getElementById("sfCategory")?.value       || "",
+    Property:       document.getElementById("sfProperty")?.value       || "",
+    "App status":   document.getElementById("sfAppStatus")?.value      || "",
+    "Lead Status":  document.getElementById("sfLeadStatus")?.value     || "",
+    "Final Status": document.getElementById("sfFinalStatus")?.value    || "",
+    NM:             document.getElementById("sfNM")?.value             || "",
+    MM:             document.getElementById("sfMM")?.value             || "",
+    dateFrom:       document.getElementById("sfDateFrom")?.value       || "",
+    dateTo:         document.getElementById("sfDateTo")?.value         || "",
+    signageFrom:    document.getElementById("sfSignageFrom")?.value    || "",
+    signateTo:      document.getElementById("sfSignageTo")?.value      || "",
+    launchFrom:     document.getElementById("sfLaunchFrom")?.value     || "",
+    launchTo:       document.getElementById("sfLaunchTo")?.value       || "",
   };
 }
 
 function getSheetFilteredData() {
   const sf   = getSheetFilters();
-  const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
-  const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
+  const from        = sf.dateFrom    ? new Date(sf.dateFrom    + "T00:00:00") : null;
+  const to          = sf.dateTo      ? new Date(sf.dateTo      + "T23:59:59") : null;
+  const signageFrom = sf.signageFrom ? new Date(sf.signageFrom + "T00:00:00") : null;
+  const signateTo   = sf.signateTo   ? new Date(sf.signateTo   + "T23:59:59") : null;
+  const launchFrom  = sf.launchFrom  ? new Date(sf.launchFrom  + "T00:00:00") : null;
+  const launchTo    = sf.launchTo    ? new Date(sf.launchTo    + "T23:59:59") : null;
 
   return allData.filter(row => {
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
     for (const key of colKeys) {
       if (sf[key] && row[key] !== sf[key]) return false;
     }
+    // Timestamp range
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
       if (from && ts < from) return false;
       if (to   && ts > to)   return false;
+    }
+    // Signage date range
+    if (signageFrom || signateTo) {
+      const ts = parseTimestamp(row["Signage date"]);
+      if (!ts) return false;
+      if (signageFrom && ts < signageFrom) return false;
+      if (signateTo   && ts > signateTo)   return false;
+    }
+    // Launch date range
+    if (launchFrom || launchTo) {
+      const ts = parseTimestamp(row["Launch date"]);
+      if (!ts) return false;
+      if (launchFrom && ts < launchFrom) return false;
+      if (launchTo   && ts > launchTo)   return false;
     }
     return true;
   });
@@ -1211,7 +1322,7 @@ function clearSheetFilters() {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
-  ["sfDateFrom","sfDateTo"].forEach(id => {
+  ["sfDateFrom","sfDateTo","sfSignageFrom","sfSignageTo","sfLaunchFrom","sfLaunchTo"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
@@ -1257,16 +1368,23 @@ function renderSheetPreview(data) {
   }
   if (countEl) countEl.textContent = `${data.length} rows`;
 
-  const previewCols = ["Timestamp", "Name of the property", "Name", "Category", "NM", "MM",
-    "Lead Status", "Final Status", "App status", "Road", "Property",
-    "Contact Name", "Contact number"];
+  // Columns shown in the sheet preview table (in display order)
+  const previewCols = [
+    "MM", "NM", "NM Id", "Name of the property", "Name", "Category",
+    "Closure type", "Lat", "Long", "Location (Google Maps URL) / Map Code",
+    "Owner Contact Name", "Owner Contact Number",
+    "Contact Name", "Contact number",
+    "Property", "App status", "Lead Status", "Final Status",
+    "Signage date", "Launch date"
+  ];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
 
   const bodyRows = data.map((row, idx) => `
     <tr data-idx="${idx}" style="cursor:pointer">
       ${availableCols.map(c => {
         const raw     = row[c] != null ? row[c] : "";
-        const display = c === "Timestamp" ? formatTsDisplay(row[c]) : escHtml(raw);
+        const TS_COLS = ["Timestamp", "Signage date", "Launch date"];
+        const display = TS_COLS.includes(c) ? formatTsDisplay(row[c]) : escHtml(raw);
         return `<td title="${escHtml(String(raw))}">${display}</td>`;
       }).join("")}
     </tr>`).join("");
