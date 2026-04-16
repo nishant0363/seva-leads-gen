@@ -5,7 +5,7 @@
 const CONFIG = {
 
   // ── Main property sheet (Form Responses 1) ──────────────────
-  API_URL: "https://script.google.com/macros/s/AKfycby_Sy4JUpWQSk8Jg3MEz9XVJanDvogqMl6Y5OyrIAYPIQX-hEtAq6RTOpQHlRSXuBJCkw/exec",
+  API_URL: "https://script.google.com/macros/s/AKfycbyiTdOs2dHn8bnSJ87P15BkRar9nPMS1tchQ47JuKSccGDUXuFwVSkPtt_NiQJESNBAjQ/exec",
 
   // ── Hotspots sheet ──────────────────────────────────────────
   // Columns: lat, lng, name, hood, cluster
