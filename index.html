@@ -157,6 +157,51 @@
         <div id="summaryTablesContainer" style="margin-top:12px"></div>
       </div>
     </div>
+<!-- ══════════════════════════════════════════════════
+     INCENTIVE TRACKER  —  paste inside a .container div
+     or wrap in one as shown below
+     ══════════════════════════════════════════════════ -->
+<div class="container">
+  <div class="sheet-preview-card">
+
+    <!-- Header row — mirrors Sheet Preview header exactly -->
+    <div class="sheet-preview-header">
+      <h3>💰 Incentive Tracker</h3>
+      <span id="incRowCount" class="row-count"></span>
+      <button class="summary-dl-btn" onclick="downloadSummaryTable('incPrivateTable','incentive_private')" style="margin-left:auto">⬇ Private CSV</button>
+      <button class="summary-dl-btn" onclick="downloadSummaryTable('incPublicTable','incentive_public')" style="margin-left:4px">⬇ Public CSV</button>
+    </div>
+
+    <!-- Filter bar — mirrors sheet-filter-bar pattern -->
+    <div class="sheet-filter-bar">
+      <span class="date-filter-label">📅 Date Range:</span>
+      <input type="date" id="incDateFrom" />
+      <span style="color:#888;font-size:13px">to</span>
+      <input type="date" id="incDateTo" />
+      <span class="date-filter-label">📍 Proximity:</span>
+      <select id="incProximity" style="min-width:180px">
+        <option value="all">All properties</option>
+        <option value="250">≤ 250m from hotspot only</option>
+      </select>
+      <button class="primary" onclick="applyIncentiveFilters()">Apply</button>
+      <button onclick="clearIncentiveFilters()">Clear</button>
+    </div>
+
+    <!-- Incentive formula note -->
+    <div style="margin-top:10px;padding:9px 14px;background:#fffbe6;border:1px solid #f0d060;border-radius:8px;font-size:12px;color:#7a6000;line-height:1.6">
+      <b>Incentive formula —</b>
+      <b>Private:</b> 1 launch = ₹100 &nbsp;·&nbsp; 2 = ₹300 &nbsp;·&nbsp; 3 = ₹600 &nbsp;·&nbsp; 4 = ₹1000 &nbsp;(each extra launch adds ₹100 more than previous step)
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      <b>Public:</b> ₹20 per launched property
+    </div>
+
+    <!-- Tables render here by renderIncentiveTables() -->
+    <div id="incentiveContainer" style="margin-top:14px">
+      <p style="color:#aaa;font-size:13px;padding:4px 0">Select a date range and click Apply to calculate incentives.</p>
+    </div>
+
+  </div>
+</div>
   <div id="addPointModal" class="modal-overlay" style="display:none">
     <div class="modal-box">
       <div class="modal-header">

@@ -383,6 +383,7 @@ async function loadData() {
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
 
     renderSummaryTables();
+    renderIncentiveTables();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -1702,4 +1703,184 @@ function selectSearchResult(lat, lng, name) {
   map.setView(latlng, 16);
   document.getElementById("mapSearchInput").value = name;
   document.getElementById("mapSearchResults").classList.remove("open");
+}
+// ============================================================
+// INCENTIVE TRACKER
+// ============================================================
+
+function getIncentiveFilters() {
+  return {
+    dateFrom:  document.getElementById("incDateFrom")?.value  || "",
+    dateTo:    document.getElementById("incDateTo")?.value    || "",
+    proximity: document.getElementById("incProximity")?.value || "all",
+  };
+}
+
+// Incentive formula — Private only, based on number of launches
+// 1 launch = ₹100, 2 = ₹200, each additional adds 200 more than previous increment
+// i.e. increments: 100, 200, 300, 400 …  → cumulative: 100, 300, 600, 1000 …
+function calcPrivateIncentive(n) {
+  if (!n || n <= 0) return 0;
+  let total = 0;
+  for (let i = 1; i <= n; i++) {
+    total += i * 100; // step i adds i×100
+  }
+  return total;
+}
+
+function renderIncentiveTables() {
+  const container = document.getElementById("incentiveContainer");
+  if (!container) return;
+
+  const { dateFrom, dateTo, proximity } = getIncentiveFilters();
+  const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
+  const to   = dateTo   ? new Date(dateTo   + "T23:59:59") : null;
+
+  // ── Base dataset — apply proximity filter first ──────────────
+  let base = allData;
+  if (proximity === "250") {
+    base = allData.filter(r => {
+      const d = parseFloat(r["displacement to nearest hotspot"]);
+      return !isNaN(d) && d <= 250;
+    });
+  }
+
+  // ── Helper: is a date value within the selected range ────────
+  function inRange(val) {
+    const d = parseTimestamp(val);
+    if (!d) return false;
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  }
+
+  // ── Helper: is Timestamp within range (leads) ─────────────────
+  function leadInRange(row) {
+    const d = parseTimestamp(row["Timestamp"]);
+    if (!d) return false;
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  }
+
+  // ── Group by email ────────────────────────────────────────────
+  const emails = [...new Set(base.map(r => (r["Email Address"] || "").trim()).filter(Boolean))].sort();
+
+  function buildTableData(propType) {
+    return emails.map(email => {
+      const rows = base.filter(r => (r["Email Address"] || "").trim() === email);
+
+      // Launched: has a value in Launch date AND launch date in range
+      const launchedRows = rows.filter(r => r["Property"] === propType && inRange(r["Launch date"]));
+      const launchCount  = launchedRows.length;
+      const launchNames  = launchedRows.map(r => r["Name of the property"] || "—").join(", ");
+
+      // Leads: Timestamp in range (all property types for this email)
+      const leadCount = rows.filter(r => leadInRange(r)).length;
+
+      // Deal closed: Signage date in range AND property type matches
+      const dealRows   = rows.filter(r => r["Property"] === propType && inRange(r["Signage date"]));
+      const dealCount  = dealRows.length;
+      const dealNames  = dealRows.map(r => r["Name of the property"] || "—").join(", ");
+
+      // Incentive
+      const incentive = propType === "Private"
+        ? calcPrivateIncentive(launchCount)
+        : launchCount * 20;
+
+      return { email, launchCount, launchNames, leadCount, dealCount, dealNames, incentive };
+    }).filter(r => r.launchCount > 0 || r.leadCount > 0 || r.dealCount > 0);
+  }
+
+  function renderTable(tableData, propType, tableId) {
+    if (!tableData.length) {
+      return `<p style="color:#aaa;font-size:13px;padding:8px 0">No data for ${propType} in this range.</p>`;
+    }
+
+    const totalLaunches  = tableData.reduce((s, r) => s + r.launchCount, 0);
+    const totalLeads     = tableData.reduce((s, r) => s + r.leadCount,   0);
+    const totalDeals     = tableData.reduce((s, r) => s + r.dealCount,   0);
+    const totalIncentive = tableData.reduce((s, r) => s + r.incentive,   0);
+
+    const rows = tableData.map(r => `
+      <tr>
+        <td style="font-size:12px">${escHtml(r.email)}</td>
+        <td style="text-align:center"><b>${r.launchCount}</b></td>
+        <td style="font-size:11px;color:#555;max-width:220px;word-break:break-word">${escHtml(r.launchNames || "—")}</td>
+        <td style="text-align:center">${r.leadCount}</td>
+        <td style="text-align:center"><b>${r.dealCount}</b></td>
+        <td style="font-size:11px;color:#555;max-width:220px;word-break:break-word">${escHtml(r.dealNames || "—")}</td>
+        <td style="text-align:right;font-weight:700;color:${r.incentive > 0 ? '#27ae60' : '#aaa'}">₹${r.incentive}</td>
+      </tr>`).join("");
+
+    return `
+      <div style="overflow-x:auto">
+        <table class="summary-table" id="${tableId}" style="min-width:820px">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th style="text-align:center">Launched</th>
+              <th>Launched Properties</th>
+              <th style="text-align:center">Leads</th>
+              <th style="text-align:center">Deals Closed</th>
+              <th>Closed Properties</th>
+              <th style="text-align:right">Incentive</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr class="summary-total-row">
+              <td><b>Total</b></td>
+              <td style="text-align:center"><b>${totalLaunches}</b></td>
+              <td></td>
+              <td style="text-align:center"><b>${totalLeads}</b></td>
+              <td style="text-align:center"><b>${totalDeals}</b></td>
+              <td></td>
+              <td style="text-align:right;font-weight:700;color:#27ae60">₹${totalIncentive}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <button class="summary-dl-btn" style="margin-top:6px" onclick="downloadSummaryTable('${tableId}','incentive_${propType.toLowerCase()}')">⬇ CSV</button>`;
+  }
+
+  const privateData = buildTableData("Private");
+  const publicData  = buildTableData("Public");
+
+  const proximityLabel = proximity === "250"
+    ? `<span style="background:#e74c3c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">≤250m from hotspot</span>`
+    : `<span style="background:#2980b9;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">All properties</span>`;
+
+  const incentiveNote = `
+    <div style="background:#fffbe6;border:1px solid #f0d060;border-radius:6px;padding:10px 14px;font-size:12px;color:#7a6000;margin-bottom:16px">
+      <b>Incentive formula —</b>
+      <b>Private:</b> 1 launch = ₹100 · 2 = ₹300 · 3 = ₹600 · 4 = ₹1000 … (each extra launch adds ₹100 more than previous step) &nbsp;|&nbsp;
+      <b>Public:</b> ₹20 per launched property
+    </div>`;
+
+  container.innerHTML = incentiveNote + `
+    <div class="summary-block">
+      <div class="summary-block-header">
+        <h4 class="summary-block-title">🏠 Private Properties ${proximityLabel}</h4>
+      </div>
+      ${renderTable(privateData, "Private", "incPrivateTable")}
+    </div>
+    <div class="summary-block" style="margin-top:24px">
+      <div class="summary-block-header">
+        <h4 class="summary-block-title">🏢 Public Properties ${proximityLabel}</h4>
+      </div>
+      ${renderTable(publicData, "Public", "incPublicTable")}
+    </div>`;
+}
+
+function applyIncentiveFilters() { renderIncentiveTables(); }
+
+function clearIncentiveFilters() {
+  ["incDateFrom", "incDateTo"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  const prox = document.getElementById("incProximity");
+  if (prox) prox.value = "all";
+  renderIncentiveTables();
 }
