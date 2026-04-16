@@ -383,7 +383,8 @@ async function loadData() {
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
 
     renderSummaryTables();
-    renderIncentiveTables();
+    // NOTE: renderIncentiveTables() is NOT called automatically here.
+    // User must click Apply in the Incentive Tracker or use the Recalculate button.
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -391,8 +392,50 @@ async function loadData() {
 }
 
 // ============================================================
-// RENDER PROPERTY MARKERS
+// RECALCULATE HOTSPOT DATA (manual trigger only)
 // ============================================================
+async function recalculateHotspots() {
+  const btn = document.getElementById("btnRecalcHotspots");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ Recalculating…";
+  }
+  const statusEl = document.getElementById("recalcStatus");
+  if (statusEl) {
+    statusEl.textContent = "Fetching hotspot, demand & idle data from server…";
+    statusEl.style.color = "#555";
+  }
+  try {
+    // Hitting the API with no special params triggers enrichWithHotspotInfo + writeEnrichedColumnsToSheet on the server
+    const url = CONFIG.API_URL + "?t=" + Date.now() + "&recalc=1";
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      allData = data;
+      if (statusEl) {
+        statusEl.textContent = `✅ Done — ${data.length} rows enriched (nearest hotspot, demand, idle, feasibility updated).`;
+        statusEl.style.color = "#27ae60";
+      }
+      renderMarkers();
+      renderSheetPreview(allData);
+      renderSummaryTables();
+    } else {
+      throw new Error(data.error || "Unexpected response");
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.textContent = "❌ Error: " + err.message;
+      statusEl.style.color = "#c0392b";
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "🔄 Recalculate Hotspot Data";
+    }
+  }
+}
+
+
 function getPropertyName(row) {
   return row["Name of the property"] || row["Name"] || "No Name";
 }
@@ -1717,15 +1760,22 @@ function getIncentiveFilters() {
 }
 
 // Incentive formula — Private only, based on number of launches
-// 1 launch = ₹100, 2 = ₹200, each additional adds 200 more than previous increment
-// i.e. increments: 100, 200, 300, 400 …  → cumulative: 100, 300, 600, 1000 …
-function calcPrivateIncentive(n) {
+// Milestone payouts: 1=100, 2=200, 3=400, 4=600, 5=800, 6=1000 (cumulative)
+// Each step beyond 6 continues the +200 pattern
+// Washroom Bonus: +100 per property that has a washroom (closure type contains "Washroom")
+const LAUNCH_MILESTONES = [0, 100, 200, 400, 600, 800, 1000];
+
+function calcPrivateIncentive(n, washroomCount) {
   if (!n || n <= 0) return 0;
-  let total = 0;
-  for (let i = 1; i <= n; i++) {
-    total += i * 100; // step i adds i×100
+  let base = 0;
+  if (n < LAUNCH_MILESTONES.length) {
+    base = LAUNCH_MILESTONES[n];
+  } else {
+    // Beyond 6 launches, continue +200 pattern from 1000
+    base = 1000 + (n - 6) * 200;
   }
-  return total;
+  const washroomBonus = (washroomCount || 0) * 100;
+  return base + washroomBonus;
 }
 
 function renderIncentiveTables() {
@@ -1773,7 +1823,17 @@ function renderIncentiveTables() {
       // Launched: has a value in Launch date AND launch date in range
       const launchedRows = rows.filter(r => r["Property"] === propType && inRange(r["Launch date"]));
       const launchCount  = launchedRows.length;
-      const launchNames  = launchedRows.map(r => r["Name of the property"] || "—").join(", ");
+      const launchNames  = launchedRows.map(r => {
+        const name = r["Name of the property"] || "—";
+        const ct = (r["Closure type"] || "").toLowerCase();
+        return ct.includes("washroom") ? name + " 🚿" : name;
+      }).join(", ");
+
+      // Count washroom bonus — launched properties whose Closure type contains "Washroom"
+      const washroomCount = launchedRows.filter(r => {
+        const ct = (r["Closure type"] || "").toLowerCase();
+        return ct.includes("washroom");
+      }).length;
 
       // Leads: Timestamp in range (all property types for this email)
       const leadCount = rows.filter(r => leadInRange(r)).length;
@@ -1785,10 +1845,10 @@ function renderIncentiveTables() {
 
       // Incentive
       const incentive = propType === "Private"
-        ? calcPrivateIncentive(launchCount)
+        ? calcPrivateIncentive(launchCount, washroomCount)
         : launchCount * 20;
 
-      return { email, launchCount, launchNames, leadCount, dealCount, dealNames, incentive };
+      return { email, launchCount, launchNames, leadCount, dealCount, dealNames, incentive, washroomCount };
     }).filter(r => r.launchCount > 0 || r.leadCount > 0 || r.dealCount > 0);
   }
 
@@ -1802,25 +1862,29 @@ function renderIncentiveTables() {
     const totalDeals     = tableData.reduce((s, r) => s + r.dealCount,   0);
     const totalIncentive = tableData.reduce((s, r) => s + r.incentive,   0);
 
+    const totalWashrooms = propType === "Private" ? tableData.reduce((s, r) => s + (r.washroomCount || 0), 0) : null;
+
     const rows = tableData.map(r => `
       <tr>
         <td style="font-size:12px">${escHtml(r.email)}</td>
         <td style="text-align:center"><b>${r.launchCount}</b></td>
-        <td style="font-size:11px;color:#555;max-width:220px;word-break:break-word">${escHtml(r.launchNames || "—")}</td>
+        <td class="inc-names-cell">${escHtml(r.launchNames || "—")}</td>
+        ${propType === "Private" ? `<td style="text-align:center;color:${r.washroomCount > 0 ? '#0077b6' : '#aaa'}">${r.washroomCount > 0 ? '+₹' + (r.washroomCount * 100) : '—'}</td>` : ""}
         <td style="text-align:center">${r.leadCount}</td>
         <td style="text-align:center"><b>${r.dealCount}</b></td>
-        <td style="font-size:11px;color:#555;max-width:220px;word-break:break-word">${escHtml(r.dealNames || "—")}</td>
+        <td class="inc-names-cell">${escHtml(r.dealNames || "—")}</td>
         <td style="text-align:right;font-weight:700;color:${r.incentive > 0 ? '#27ae60' : '#aaa'}">₹${r.incentive}</td>
       </tr>`).join("");
 
     return `
       <div style="overflow-x:auto">
-        <table class="summary-table" id="${tableId}" style="min-width:820px">
+        <table class="summary-table incentive-table" id="${tableId}" style="min-width:${propType === "Private" ? "920px" : "820px"}">
           <thead>
             <tr>
               <th>Email</th>
               <th style="text-align:center">Launched</th>
               <th>Launched Properties</th>
+              ${propType === "Private" ? `<th style="text-align:center">🚿 Washroom Bonus</th>` : ""}
               <th style="text-align:center">Leads</th>
               <th style="text-align:center">Deals Closed</th>
               <th>Closed Properties</th>
@@ -1833,6 +1897,7 @@ function renderIncentiveTables() {
               <td><b>Total</b></td>
               <td style="text-align:center"><b>${totalLaunches}</b></td>
               <td></td>
+              ${propType === "Private" ? `<td style="text-align:center;color:#0077b6;font-weight:700">${totalWashrooms > 0 ? '+₹' + (totalWashrooms * 100) : '—'}</td>` : ""}
               <td style="text-align:center"><b>${totalLeads}</b></td>
               <td style="text-align:center"><b>${totalDeals}</b></td>
               <td></td>
@@ -1852,9 +1917,12 @@ function renderIncentiveTables() {
     : `<span style="background:#2980b9;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">All properties</span>`;
 
   const incentiveNote = `
-    <div style="background:#fffbe6;border:1px solid #f0d060;border-radius:6px;padding:10px 14px;font-size:12px;color:#7a6000;margin-bottom:16px">
-      <b>Incentive formula —</b>
-      <b>Private:</b> 1 launch = ₹100 · 2 = ₹300 · 3 = ₹600 · 4 = ₹1000 … (each extra launch adds ₹100 more than previous step) &nbsp;|&nbsp;
+    <div style="background:#fffbe6;border:1px solid #f0d060;border-radius:6px;padding:10px 14px;font-size:12px;color:#7a6000;margin-bottom:16px;line-height:1.8">
+      <b>Incentive formula —</b><br>
+      <b>Private Launches:</b> 1=₹100 &nbsp;·&nbsp; 2=₹200 &nbsp;·&nbsp; 3=₹400 &nbsp;·&nbsp; 4=₹600 &nbsp;·&nbsp; 5=₹800 &nbsp;·&nbsp; 6=₹1000 (each extra adds ₹200 more)
+      &nbsp;&nbsp;+&nbsp;&nbsp;
+      <b>🚿 Washroom Bonus: ₹100 per property</b> with "Washroom" in Closure type
+      &nbsp;&nbsp;|&nbsp;&nbsp;
       <b>Public:</b> ₹20 per launched property
     </div>`;
 

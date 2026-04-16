@@ -158,6 +158,24 @@
       </div>
     </div>
 <!-- ══════════════════════════════════════════════════
+     RECALCULATE HOTSPOT DATA
+     ══════════════════════════════════════════════════ -->
+<div class="container">
+  <div class="sheet-preview-card">
+    <div class="sheet-preview-header">
+      <h3>🔄 Hotspot Enrichment</h3>
+    </div>
+    <p style="margin:6px 0 12px;font-size:13px;color:#666;line-height:1.6">
+      Recalculates <b>nearest hotspot</b>, <b>displacement</b>, <b>demand count</b>, <b>idle count</b>, and <b>launch feasibility</b> for all properties. This writes updated values back to the sheet — run only when hotspot/demand/idle data has changed.
+    </p>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button id="btnRecalcHotspots" class="primary" onclick="recalculateHotspots()">🔄 Recalculate Hotspot Data</button>
+      <span id="recalcStatus" style="font-size:13px;color:#555"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
      INCENTIVE TRACKER  —  paste inside a .container div
      or wrap in one as shown below
      ══════════════════════════════════════════════════ -->
@@ -188,9 +206,11 @@
     </div>
 
     <!-- Incentive formula note -->
-    <div style="margin-top:10px;padding:9px 14px;background:#fffbe6;border:1px solid #f0d060;border-radius:8px;font-size:12px;color:#7a6000;line-height:1.6">
-      <b>Incentive formula —</b>
-      <b>Private:</b> 1 launch = ₹100 &nbsp;·&nbsp; 2 = ₹300 &nbsp;·&nbsp; 3 = ₹600 &nbsp;·&nbsp; 4 = ₹1000 &nbsp;(each extra launch adds ₹100 more than previous step)
+    <div style="margin-top:10px;padding:9px 14px;background:#fffbe6;border:1px solid #f0d060;border-radius:8px;font-size:12px;color:#7a6000;line-height:1.8">
+      <b>Incentive formula —</b><br>
+      <b>Private Launches:</b> 1=₹100 &nbsp;·&nbsp; 2=₹200 &nbsp;·&nbsp; 3=₹400 &nbsp;·&nbsp; 4=₹600 &nbsp;·&nbsp; 5=₹800 &nbsp;·&nbsp; 6=₹1000 (each extra adds ₹200 more)
+      &nbsp;&nbsp;+&nbsp;&nbsp;
+      <b>🚿 Washroom Bonus: ₹100 per property</b> with "Washroom" in Closure type
       &nbsp;&nbsp;|&nbsp;&nbsp;
       <b>Public:</b> ₹20 per launched property
     </div>
