@@ -1421,12 +1421,15 @@ function renderSheetPreview(data) {
 
   // Columns shown in the sheet preview table (in display order)
   const previewCols = [
-    "MM", "NM", "NM Id", "Name of the property", "Name", "Category",
+    "MM", "NM", "NM Id", "Name of the property", "App status", "Category",
     "Closure type", "Lat", "Long", "Location (Google Maps URL) / Map Code",
     "Owner Contact Name", "Owner Contact Number",
     "Contact Name", "Contact number",
-    "Property", "App status", "Lead Status", "Final Status",
-    "Signage date", "Launch date"
+    "Property", "Signage date", "Launch date", 
+    "Photo 1 (Image Upload) (From Road)",	
+    "Photo 2 (Image Upload) (Sitting Area)",	
+    "Photo 3 (Image Upload)", "Agreement Photo (Image Upload)",
+    "Lead Status", "Final Status"
   ];
   const availableCols = previewCols.filter(c => data[0].hasOwnProperty(c));
 
