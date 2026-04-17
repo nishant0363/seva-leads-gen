@@ -402,26 +402,55 @@ async function recalculateHotspots() {
   }
   const statusEl = document.getElementById("recalcStatus");
   if (statusEl) {
-    statusEl.textContent = "Fetching hotspot, demand & idle data from server…";
+    statusEl.textContent = "Fetching & enriching hotspot data from server…";
     statusEl.style.color = "#555";
   }
   try {
-    // Hitting the API with no special params triggers enrichWithHotspotInfo + writeEnrichedColumnsToSheet on the server
-    const url = CONFIG.API_URL + "?t=" + Date.now() + "&recalc=1";
+    const url  = CONFIG.API_URL + "?recalc=1&t=" + Date.now();
     const res  = await fetch(url);
     const data = await res.json();
-    if (Array.isArray(data)) {
-      allData = data;
-      if (statusEl) {
-        statusEl.textContent = `✅ Done — ${data.length} rows enriched (nearest hotspot, demand, idle, feasibility updated).`;
-        statusEl.style.color = "#27ae60";
-      }
-      renderMarkers();
-      renderSheetPreview(allData);
-      renderSummaryTables();
-    } else {
-      throw new Error(data.error || "Unexpected response");
+
+    if (!Array.isArray(data)) throw new Error(data.error || "Unexpected response");
+
+    if (statusEl) {
+      statusEl.textContent = `⏳ Writing ${data.length} enriched rows back to sheet…`;
     }
+
+    const ENRICHED_COLS = [
+      "nearest hotspot",
+      "displacement to nearest hotspot",
+      "demand count",
+      "idle count",
+      "launch feasibility"
+    ];
+
+    // POST each row that has a _rowIndex, writing only enriched cols back.
+    // Timestamp is never included — matches the server-side NEVER_WRITE_COLS guard.
+    const writes = data
+      .filter(row => row._rowIndex)
+      .map(row => {
+        const payload = { _rowIndex: row._rowIndex };
+        ENRICHED_COLS.forEach(col => {
+          if (row[col] !== undefined) payload[col] = row[col];
+        });
+        return fetch(CONFIG.API_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+      });
+
+    await Promise.all(writes);
+
+    allData = data;
+    if (statusEl) {
+      statusEl.textContent =
+        `✅ Done — ${data.length} rows enriched and saved (nearest hotspot, demand, idle, feasibility updated).`;
+      statusEl.style.color = "#27ae60";
+    }
+    renderMarkers();
+    renderSheetPreview(allData);
+    renderSummaryTables();
+
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = "❌ Error: " + err.message;
