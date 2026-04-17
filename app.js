@@ -1750,15 +1750,18 @@ function selectSearchResult(lat, lng, name) {
   document.getElementById("mapSearchInput").value = name;
   document.getElementById("mapSearchResults").classList.remove("open");
 }
+
+
 // ============================================================
 // INCENTIVE TRACKER
 // ============================================================
 
 function getIncentiveFilters() {
   return {
-    dateFrom:  document.getElementById("incDateFrom")?.value  || "",
-    dateTo:    document.getElementById("incDateTo")?.value    || "",
-    proximity: document.getElementById("incProximity")?.value || "all",
+    dateFrom:   document.getElementById("incDateFrom")?.value   || "",
+    dateTo:     document.getElementById("incDateTo")?.value     || "",
+    proximity:  document.getElementById("incProximity")?.value  || "all",
+    duplicates: document.getElementById("incDuplicates")?.value || "all",
   };
 }
 
@@ -1785,7 +1788,7 @@ function renderIncentiveTables() {
   const container = document.getElementById("incentiveContainer");
   if (!container) return;
 
-  const { dateFrom, dateTo, proximity } = getIncentiveFilters();
+  const { dateFrom, dateTo, proximity, duplicates } = getIncentiveFilters();
   const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
   const to   = dateTo   ? new Date(dateTo   + "T23:59:59") : null;
 
@@ -1796,6 +1799,13 @@ function renderIncentiveTables() {
       const d = parseFloat(r["displacement to nearest hotspot"]);
       return !isNaN(d) && d <= 250;
     });
+  }
+
+  // ── Apply duplicate filter to base dataset ───────────────────
+  if (duplicates === "exclude") {
+    base = base.filter(r => (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate");
+  } else if (duplicates === "only") {
+    base = base.filter(r => (r["Duplicate"] || "").trim().toLowerCase() === "duplicate");
   }
 
   // ── Helper: is a date value within the selected range ────────
@@ -1816,42 +1826,106 @@ function renderIncentiveTables() {
     return true;
   }
 
+  // ── Build a Sr No → property name map from ALL data (not just filtered/ranged)
+  // Used to resolve "duplicate of Sr No X" → property name
+  const srNoToName = {};
+  allData.forEach(r => {
+    const sr = String(r["Sr No"] || "").trim();
+    const nm = (r["Name of the property"] || "").trim();
+    if (sr && nm && (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate") {
+      // prefer the non-duplicate (original) entry for each Sr No
+      if (!srNoToName[sr]) srNoToName[sr] = nm;
+    }
+  });
+  // Fallback: if an Sr No only appears on duplicate rows, still store it
+  allData.forEach(r => {
+    const sr = String(r["Sr No"] || "").trim();
+    const nm = (r["Name of the property"] || "").trim();
+    if (sr && nm && !srNoToName[sr]) srNoToName[sr] = nm;
+  });
+
   // ── Group by email ────────────────────────────────────────────
-  const emails = [...new Set(base.map(r => (r["Email Address"] || "").trim()).filter(Boolean))].sort();
+  // Collect unique emails + their display name ("Lead From") from base
+  const emailMeta = {};
+  base.forEach(r => {
+    const email = (r["Email Address"] || "").trim();
+    if (!email) return;
+    if (!emailMeta[email]) {
+      emailMeta[email] = { name: (r["Lead From"] || "").trim() };
+    } else if (!emailMeta[email].name) {
+      emailMeta[email].name = (r["Lead From"] || "").trim();
+    }
+  });
+  const emails = Object.keys(emailMeta).sort();
 
   function buildTableData(propType) {
     return emails.map(email => {
+      const name = emailMeta[email].name || "";
       const rows = base.filter(r => (r["Email Address"] || "").trim() === email);
 
-      // Launched: has a value in Launch date AND launch date in range
+      // ── Launched ─────────────────────────────────────────────
       const launchedRows = rows.filter(r => r["Property"] === propType && inRange(r["Launch date"]));
       const launchCount  = launchedRows.length;
       const launchNames  = launchedRows.map(r => {
-        const name = r["Name of the property"] || "—";
+        const nm = r["Name of the property"] || "—";
         const ct = (r["Closure type"] || "").toLowerCase();
-        return ct.includes("washroom") ? name + " 🚿" : name;
+        return ct.includes("washroom") ? nm + " 🚿" : nm;
       }).join(", ");
 
-      // Count washroom bonus — launched properties whose Closure type contains "Washroom"
-      const washroomCount = launchedRows.filter(r => {
-        const ct = (r["Closure type"] || "").toLowerCase();
-        return ct.includes("washroom");
-      }).length;
+      // Count washroom bonus
+      const washroomCount = launchedRows.filter(r =>
+        (r["Closure type"] || "").toLowerCase().includes("washroom")
+      ).length;
 
-      // Leads: Timestamp in range (all property types for this email)
-      const leadCount = rows.filter(r => leadInRange(r)).length;
+      // ── Leads in range ───────────────────────────────────────
+      const leadRowsInRange = rows.filter(r => leadInRange(r));
+      const leadCount = leadRowsInRange.length;
 
-      // Deal closed: Signage date in range AND property type matches
-      const dealRows   = rows.filter(r => r["Property"] === propType && inRange(r["Signage date"]));
-      const dealCount  = dealRows.length;
-      const dealNames  = dealRows.map(r => r["Name of the property"] || "—").join(", ");
+      // ── Non-duplicate leads ──────────────────────────────────
+      // A lead is non-duplicate if its "Duplicate" column is NOT "Duplicate"
+      const nonDupLeadCount = leadRowsInRange.filter(r =>
+        (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate"
+      ).length;
 
-      // Incentive
+      // ── Duplicate breakdown for this person in the date range ─
+      // For each lead row in range that IS a duplicate, map:
+      //   "this property name" → "original property name (Sr No X)"
+      // We use allData (all dates) to resolve the original by Sr No
+      const dupPairs = [];
+      leadRowsInRange.forEach(r => {
+        if ((r["Duplicate"] || "").trim().toLowerCase() !== "duplicate") return;
+        const thisProp = (r["Name of the property"] || "—").trim();
+        const srNo     = String(r["Sr No"] || "").trim();
+        // Find the original: same Sr No, not flagged as duplicate, in allData
+        const original = allData.find(o =>
+          String(o["Sr No"] || "").trim() === srNo &&
+          (o["Duplicate"] || "").trim().toLowerCase() !== "duplicate" &&
+          (o["Name of the property"] || "").trim() !== thisProp
+        );
+        const origName = original
+          ? (original["Name of the property"] || "").trim()
+          : (srNoToName[srNo] || `Sr No ${srNo}`);
+        dupPairs.push({ thisProp, origName, srNo });
+      });
+
+      // ── Deal closed ──────────────────────────────────────────
+      const dealRows  = rows.filter(r => r["Property"] === propType && inRange(r["Signage date"]));
+      const dealCount = dealRows.length;
+      const dealNames = dealRows.map(r => r["Name of the property"] || "—").join(", ");
+
+      // ── Incentive ────────────────────────────────────────────
       const incentive = propType === "Private"
         ? calcPrivateIncentive(launchCount, washroomCount)
         : launchCount * 20;
 
-      return { email, launchCount, launchNames, leadCount, dealCount, dealNames, incentive, washroomCount };
+      return {
+        email, name,
+        launchCount, launchNames,
+        washroomCount,
+        leadCount, nonDupLeadCount, dupPairs,
+        dealCount, dealNames,
+        incentive,
+      };
     }).filter(r => r.launchCount > 0 || r.leadCount > 0 || r.dealCount > 0);
   }
 
@@ -1860,36 +1934,67 @@ function renderIncentiveTables() {
       return `<p style="color:#aaa;font-size:13px;padding:8px 0">No data for ${propType} in this range.</p>`;
     }
 
-    const totalLaunches  = tableData.reduce((s, r) => s + r.launchCount, 0);
-    const totalLeads     = tableData.reduce((s, r) => s + r.leadCount,   0);
-    const totalDeals     = tableData.reduce((s, r) => s + r.dealCount,   0);
-    const totalIncentive = tableData.reduce((s, r) => s + r.incentive,   0);
+    const totalLaunches    = tableData.reduce((s, r) => s + r.launchCount,    0);
+    const totalLeads       = tableData.reduce((s, r) => s + r.leadCount,      0);
+    const totalNonDupLeads = tableData.reduce((s, r) => s + r.nonDupLeadCount, 0);
+    const totalDeals       = tableData.reduce((s, r) => s + r.dealCount,      0);
+    const totalIncentive   = tableData.reduce((s, r) => s + r.incentive,      0);
+    const totalWashrooms   = propType === "Private"
+      ? tableData.reduce((s, r) => s + (r.washroomCount || 0), 0)
+      : null;
 
-    const totalWashrooms = propType === "Private" ? tableData.reduce((s, r) => s + (r.washroomCount || 0), 0) : null;
+    const rows = tableData.map(r => {
+      // Render duplicate pairs as a compact key→value list
+      const dupCell = r.dupPairs.length
+        ? r.dupPairs.map(p =>
+            `<span class="dup-pair">
+              <span class="dup-this">${escHtml(p.thisProp)}</span>
+              <span class="dup-arrow">→</span>
+              <span class="dup-orig">${escHtml(p.origName)}</span>
+            </span>`
+          ).join("")
+        : `<span style="color:#ccc">—</span>`;
 
-    const rows = tableData.map(r => `
-      <tr>
-        <td style="font-size:12px">${escHtml(r.email)}</td>
-        <td style="text-align:center"><b>${r.launchCount}</b></td>
-        <td class="inc-names-cell">${escHtml(r.launchNames || "—")}</td>
-        ${propType === "Private" ? `<td style="text-align:center;color:${r.washroomCount > 0 ? '#0077b6' : '#aaa'}">${r.washroomCount > 0 ? '+₹' + (r.washroomCount * 100) : '—'}</td>` : ""}
-        <td style="text-align:center">${r.leadCount}</td>
-        <td style="text-align:center"><b>${r.dealCount}</b></td>
-        <td class="inc-names-cell">${escHtml(r.dealNames || "—")}</td>
-        <td style="text-align:right;font-weight:700;color:${r.incentive > 0 ? '#27ae60' : '#aaa'}">₹${r.incentive}</td>
-      </tr>`).join("");
+      return `
+        <tr>
+          <td style="font-size:12px;white-space:nowrap">${escHtml(r.name || "—")}</td>
+          <td style="font-size:11px;color:#555">${escHtml(r.email)}</td>
+          <td style="text-align:center"><b>${r.launchCount}</b></td>
+          <td class="inc-names-cell">${escHtml(r.launchNames || "—")}</td>
+          ${propType === "Private"
+            ? `<td style="text-align:center;color:${r.washroomCount > 0 ? '#0077b6' : '#aaa'}">${r.washroomCount > 0 ? '+₹' + (r.washroomCount * 100) : '—'}</td>`
+            : ""}
+          <td style="text-align:center">${r.leadCount}</td>
+          <td style="text-align:center;font-weight:600;color:${r.nonDupLeadCount < r.leadCount ? '#e67e22' : '#27ae60'}">${r.nonDupLeadCount}</td>
+          <td class="dup-pairs-cell">${dupCell}</td>
+          <td style="text-align:center"><b>${r.dealCount}</b></td>
+          <td class="inc-names-cell">${escHtml(r.dealNames || "—")}</td>
+          <td style="text-align:right;font-weight:700;color:${r.incentive > 0 ? '#27ae60' : '#aaa'}">₹${r.incentive}</td>
+        </tr>`;
+    }).join("");
+
+    const privateExtraTh = propType === "Private"
+      ? `<th style="text-align:center">🚿 Washroom<br>Bonus</th>`
+      : "";
+    const privateExtraTd = propType === "Private"
+      ? `<td style="text-align:center;color:#0077b6;font-weight:700">${totalWashrooms > 0 ? '+₹' + (totalWashrooms * 100) : '—'}</td>`
+      : "";
 
     return `
       <div style="overflow-x:auto">
-        <table class="summary-table incentive-table" id="${tableId}" style="min-width:${propType === "Private" ? "920px" : "820px"}">
+        <table class="summary-table incentive-table" id="${tableId}"
+               style="min-width:${propType === "Private" ? "1100px" : "980px"}">
           <thead>
             <tr>
+              <th>Name</th>
               <th>Email</th>
               <th style="text-align:center">Launched</th>
               <th>Launched Properties</th>
-              ${propType === "Private" ? `<th style="text-align:center">🚿 Washroom Bonus</th>` : ""}
+              ${privateExtraTh}
               <th style="text-align:center">Leads</th>
-              <th style="text-align:center">Deals Closed</th>
+              <th style="text-align:center">Non-Dup<br>Leads</th>
+              <th>Duplicate Map</th>
+              <th style="text-align:center">Deals<br>Closed</th>
               <th>Closed Properties</th>
               <th style="text-align:right">Incentive</th>
             </tr>
@@ -1897,11 +2002,14 @@ function renderIncentiveTables() {
           <tbody>${rows}</tbody>
           <tfoot>
             <tr class="summary-total-row">
+              <td></td>
               <td><b>Total</b></td>
               <td style="text-align:center"><b>${totalLaunches}</b></td>
               <td></td>
-              ${propType === "Private" ? `<td style="text-align:center;color:#0077b6;font-weight:700">${totalWashrooms > 0 ? '+₹' + (totalWashrooms * 100) : '—'}</td>` : ""}
+              ${privateExtraTd}
               <td style="text-align:center"><b>${totalLeads}</b></td>
+              <td style="text-align:center"><b>${totalNonDupLeads}</b></td>
+              <td></td>
               <td style="text-align:center"><b>${totalDeals}</b></td>
               <td></td>
               <td style="text-align:right;font-weight:700;color:#27ae60">₹${totalIncentive}</td>
@@ -1909,7 +2017,8 @@ function renderIncentiveTables() {
           </tfoot>
         </table>
       </div>
-      <button class="summary-dl-btn" style="margin-top:6px" onclick="downloadSummaryTable('${tableId}','incentive_${propType.toLowerCase()}')">⬇ CSV</button>`;
+      <button class="summary-dl-btn" style="margin-top:6px"
+              onclick="downloadSummaryTable('${tableId}','incentive_${propType.toLowerCase()}')">⬇ CSV</button>`;
   }
 
   const privateData = buildTableData("Private");
@@ -1918,6 +2027,12 @@ function renderIncentiveTables() {
   const proximityLabel = proximity === "250"
     ? `<span style="background:#e74c3c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">≤250m from hotspot</span>`
     : `<span style="background:#2980b9;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">All properties</span>`;
+
+  const duplicatesLabel = duplicates === "exclude"
+    ? `<span style="background:#e67e22;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">Duplicates excluded</span>`
+    : duplicates === "only"
+    ? `<span style="background:#8e44ad;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">Duplicates only</span>`
+    : "";
 
   const incentiveNote = `
     <div style="background:#fffbe6;border:1px solid #f0d060;border-radius:6px;padding:10px 14px;font-size:12px;color:#7a6000;margin-bottom:16px;line-height:1.8">
@@ -1932,13 +2047,13 @@ function renderIncentiveTables() {
   container.innerHTML = incentiveNote + `
     <div class="summary-block">
       <div class="summary-block-header">
-        <h4 class="summary-block-title">🏠 Private Properties ${proximityLabel}</h4>
+        <h4 class="summary-block-title">🏠 Private Properties ${proximityLabel}${duplicatesLabel}</h4>
       </div>
       ${renderTable(privateData, "Private", "incPrivateTable")}
     </div>
     <div class="summary-block" style="margin-top:24px">
       <div class="summary-block-header">
-        <h4 class="summary-block-title">🏢 Public Properties ${proximityLabel}</h4>
+        <h4 class="summary-block-title">🏢 Public Properties ${proximityLabel}${duplicatesLabel}</h4>
       </div>
       ${renderTable(publicData, "Public", "incPublicTable")}
     </div>`;
@@ -1953,5 +2068,7 @@ function clearIncentiveFilters() {
   });
   const prox = document.getElementById("incProximity");
   if (prox) prox.value = "all";
+  const dup = document.getElementById("incDuplicates");
+  if (dup) dup.value = "all";
   renderIncentiveTables();
 }

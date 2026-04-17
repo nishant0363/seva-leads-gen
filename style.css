@@ -407,7 +407,7 @@ select {
   border-radius: 10px;
 }
 
-/* INCENTIVE TABLE — names cells wrap instead of overflow */
+/* Incentive table — names cells wrap instead of overflow */
 .incentive-table .inc-names-cell {
   font-size: 11px;
   color: #555;
@@ -417,14 +417,40 @@ select {
   line-height: 1.5;
   min-height: 28px;
 }
-
-.incentive-table td, .incentive-table th {
+ 
+/* Keep all other cells from wrapping */
+.incentive-table td,
+.incentive-table th {
   white-space: nowrap;
 }
-
-.incentive-table .inc-names-cell {
+.incentive-table .inc-names-cell,
+.incentive-table .dup-pairs-cell {
   white-space: normal;
 }
+ 
+/* Duplicate map cell */
+.dup-pairs-cell {
+  min-width: 180px;
+  max-width: 280px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+ 
+/* Each "this prop → original prop" pair */
+.dup-pair {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 3px;
+  padding: 2px 5px;
+  background: #fff8f0;
+  border-left: 3px solid #e67e22;
+  border-radius: 3px;
+}
+.dup-this  { color: #c0392b; font-weight: 600; }
+.dup-arrow { color: #aaa; font-size: 10px; margin: 0 2px; }
+.dup-orig  { color: #2471a3; font-style: italic; }
 
 /* SEARCH MARKER PULSE */
 @keyframes pulse {
