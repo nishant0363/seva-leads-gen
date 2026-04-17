@@ -26,9 +26,9 @@ const layerVisible = {
   hoods:      true,
   properties: true,
   hotspots:   true,
-  demand:     true,
-  idle:       true,
-  centroids:  true
+  demand:     false,
+  idle:       false,
+  centroids:  false
 };
 
 console.log("🚀 App initializing...");
@@ -39,8 +39,24 @@ async function init() {
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
   setTimeout(() => map.invalidateSize(), 300);
 
-  hoods = await fetch("hoods.json").then(r => r.json());
-  console.log(`📦 hoods.json loaded — ${hoods.length} hoods`);
+  // hoods = await fetch("hoods.json").then(r => r.json());
+  // NEW — fetch from the sheet instead:
+
+  hoods = await fetch(CONFIG.API_URL + "?action=getHoods&t=" + Date.now(), {
+    credentials: "omit"
+  }).then(r => r.json());
+
+  if (hoods.error) {
+    console.error("❌ Failed to load hoods from sheet:", hoods.error);
+    // hoods = [];
+    hoods = await fetch("hoods.json").then(r => r.json());
+    console.log(`📦 hoods.json loaded — ${hoods.length} hoods`);
+  } else {
+    console.log(`📦 hoods loaded from sheet — ${hoods.length} hoods`);
+  }
+
+
+  
 
   drawHoods();
   buildLegend();
@@ -846,21 +862,65 @@ function downloadBlob(content, filename, mimeType) {
   URL.revokeObjectURL(url);
 }
 
+// function downloadLayerKML(type) {
+//   const filteredData = getFilteredData();
+//   const label = activeFilters.NM || activeFilters.MM || "filtered";
+//   if (type === "nm") {
+//     const hoodList = hoodsByNM(getFilteredNMs());
+//     if (!hoodList.length) { alert("No NM hoods found."); return; }
+//     downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+//   } else if (type === "mm") {
+//     const seen = new Set();
+//     const hoodList = hoods.filter(h => {
+//       if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
+//       seen.add(h.micro_market); return true;
+//     });
+//     if (!hoodList.length) { alert("No MM hoods found."); return; }
+//     downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+//   } else if (type === "points") {
+//     if (!filteredData.length) { alert("No data points."); return; }
+//     downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
+//   }
+// }
+
+// function downloadLayerCSV(type) {
+//   const filteredData = getFilteredData();
+//   const label = activeFilters.NM || activeFilters.MM || "filtered";
+//   if (type === "nm") {
+//     const hoodList = hoodsByNM(getFilteredNMs());
+//     if (!hoodList.length) { alert("No NM hoods found."); return; }
+//     downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
+//   } else if (type === "mm") {
+//     const seen = new Set();
+//     const hoodList = hoods.filter(h => {
+//       if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
+//       seen.add(h.micro_market); return true;
+//     });
+//     if (!hoodList.length) { alert("No MM hoods found."); return; }
+//     downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
+//   } else if (type === "points") {
+//     if (!filteredData.length) { alert("No data points."); return; }
+//     downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
+//   }
+// }
+
 function downloadLayerKML(type) {
   const filteredData = getFilteredData();
   const label = activeFilters.NM || activeFilters.MM || "filtered";
+
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
     if (!hoodList.length) { alert("No NM hoods found."); return; }
     downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+
   } else if (type === "mm") {
-    const seen = new Set();
-    const hoodList = hoods.filter(h => {
-      if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
-      seen.add(h.micro_market); return true;
-    });
+    // ── FIX: include ALL hoods whose micro_market is in the filtered MM list.
+    // The old code used a `seen` Set that discarded every hood after the first
+    // per MM name, losing all but one polygon per micro-market.
+    const hoodList = hoodsByMM(getFilteredMMs());
     if (!hoodList.length) { alert("No MM hoods found."); return; }
     downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+
   } else if (type === "points") {
     if (!filteredData.length) { alert("No data points."); return; }
     downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
@@ -870,18 +930,18 @@ function downloadLayerKML(type) {
 function downloadLayerCSV(type) {
   const filteredData = getFilteredData();
   const label = activeFilters.NM || activeFilters.MM || "filtered";
+
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
     if (!hoodList.length) { alert("No NM hoods found."); return; }
     downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
+
   } else if (type === "mm") {
-    const seen = new Set();
-    const hoodList = hoods.filter(h => {
-      if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
-      seen.add(h.micro_market); return true;
-    });
+    // ── FIX: same as KML — use hoodsByMM() directly, no deduplication.
+    const hoodList = hoodsByMM(getFilteredMMs());
     if (!hoodList.length) { alert("No MM hoods found."); return; }
     downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
+
   } else if (type === "points") {
     if (!filteredData.length) { alert("No data points."); return; }
     downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
