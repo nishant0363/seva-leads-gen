@@ -406,8 +406,17 @@ async function recalculateHotspots() {
     statusEl.style.color = "#555";
   }
   try {
+    // GET with no-cors isn't readable either — use a JSONP-style workaround:
+    // Apps Script GET responses are readable when fetched with credentials omitted
+    // and the script is deployed as "anyone, even anonymous".
     const url  = CONFIG.API_URL + "?recalc=1&t=" + Date.now();
-    const res  = await fetch(url);
+    const res  = await fetch(url, {
+      method: "GET",
+      redirect: "follow",         // follow the Apps Script redirect chain
+      credentials: "omit",        // don't send cookies — avoids preflight
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
     if (!Array.isArray(data)) throw new Error(data.error || "Unexpected response");
@@ -424,8 +433,9 @@ async function recalculateHotspots() {
       "launch feasibility"
     ];
 
-    // POST each row that has a _rowIndex, writing only enriched cols back.
-    // Timestamp is never included — matches the server-side NEVER_WRITE_COLS guard.
+    // Fire all POSTs with no-cors — we don't need to read the response,
+    // we just need the write to land. Apps Script POST always redirects,
+    // which blocks response reading, but the write still completes.
     const writes = data
       .filter(row => row._rowIndex)
       .map(row => {
@@ -435,6 +445,8 @@ async function recalculateHotspots() {
         });
         return fetch(CONFIG.API_URL, {
           method: "POST",
+          mode: "no-cors",        // ← suppresses the CORS error on POST responses
+          credentials: "omit",
           body: JSON.stringify(payload)
         });
       });
