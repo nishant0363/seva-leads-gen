@@ -1651,7 +1651,7 @@ function renderSummaryTables() {
   const FIXED_FINAL_STATUSES = [
     "Total in funnel", "To be reactivated", "Cold", "Dropped off",
     "Deal closed - sign pending", "Places Finalised",
-    "Deal - closed - Chairs pending", "Deal closed"
+    "Deal - closed - Chairs pending", "Deal closed", "No deal required"
   ];
 
   const FIXED_COMMERCIAL_BUCKETS = [
@@ -1693,7 +1693,7 @@ function renderSummaryTables() {
       rows = data;
     } else if (status === "Places Finalised") {
       const finalisedRows = data.filter(r =>
-        ["Deal closed", "Deal - closed - Chairs pending"].includes(r["Final Status"])
+        ["Deal closed", "Deal - closed - Chairs pending", "No deal required"].includes(r["Final Status"])
       );
       const totalRows = data.length;
       const pct = (num, denom) => !denom ? "0 (0%)" : `${num} (${(num / denom * 100).toFixed(1)}%)`;
