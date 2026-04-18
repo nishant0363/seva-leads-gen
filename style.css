@@ -513,6 +513,23 @@ select {
 }
 .wr-highlight-item:last-child { border-bottom: none; }
 
+.nm-fullscreen-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid #bbb;
+  border-radius: 5px;
+  cursor: pointer;
+  background: #f8f9fa;
+  color: #444;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.nm-fullscreen-btn:hover {
+  background: #2c3e50;
+  color: #fff;
+  border-color: #2c3e50;
+}
+
 /* SCROLL */
 ::-webkit-scrollbar {
   height: 6px;

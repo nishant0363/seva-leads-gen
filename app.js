@@ -2046,6 +2046,9 @@ function renderNmMmSummary() {
   const container = document.getElementById("nmMmSummaryContainer");
   if (!container) return;
 
+  // Read Property filter (Public / Private / all)
+  const propFilter = document.getElementById("nmMmPropertyFilter")?.value || "";
+
   const FIXED_CATEGORIES = [
     "Ladies PG", "Shop", "Restaurant", "Gated community",
     "Independent Builder floor", "Bus Stop", "Park",
@@ -2054,14 +2057,15 @@ function renderNmMmSummary() {
 
   const normalizeCategory = (cat) => cat === "Apartment" ? "Independent Builder floor" : cat;
 
-  const activeData = allData.filter(r => (r["App status"] || "").trim() === "Active");
+  // Base active data — optionally filtered by Property type
+  let activeData = allData.filter(r => (r["App status"] || "").trim() === "Active");
+  if (propFilter) activeData = activeData.filter(r => (r["Property"] || "") === propFilter);
 
   // Helper: build category count table per groupKey — uses all hoods as source of truth
   function buildGroupTable(groupKey, tableId) {
-    // Get all unique NM or MM values from hoods polygon sheet (source of truth)
     const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
     const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
-    if (!groups.length) return `<p style="color:#aaa;font-size:12px">No data.</p>`;
+    if (!groups.length) return `<p style="color:#aaa;font-size:12px">No hood data.</p>`;
 
     const rows = groups.map(g => {
       const gRows = activeData.filter(r => r[groupKey] === g);
@@ -2076,30 +2080,29 @@ function renderNmMmSummary() {
       </tr>`;
     }).join("");
 
-    const totalCats = {};
-    FIXED_CATEGORIES.forEach(c => {
-      totalCats[c] = activeData.filter(r => r[groupKey] === undefined ? false : r[groupKey] && normalizeCategory(r.Category) === c).length;
-    });
-
     return `
-      <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
-        <table class="summary-table" id="${tableId}" style="min-width:700px">
-          <thead><tr>
-            <th>${groupKey}</th><th>Total Active</th>
-            ${FIXED_CATEGORIES.map(c => `<th>${escHtml(c)}</th>`).join("")}
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+      <div class="nm-table-wrap" id="${tableId}_wrap">
+        <div style="overflow-x:auto;max-height:400px;overflow-y:auto" id="${tableId}_scroll">
+          <table class="summary-table" id="${tableId}" style="min-width:700px">
+            <thead><tr>
+              <th>${groupKey}</th><th>Total Active</th>
+              ${FIXED_CATEGORIES.map(c => `<th>${escHtml(c)}</th>`).join("")}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       </div>
-      <button class="summary-dl-btn" style="margin-top:6px" onclick="downloadSummaryTable('${tableId}','active_by_${groupKey.toLowerCase()}')">⬇ CSV</button>`;
+      <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+        <button class="summary-dl-btn" onclick="downloadSummaryTable('${tableId}','active_by_${groupKey.toLowerCase()}')">⬇ CSV</button>
+        <button class="nm-fullscreen-btn" onclick="openNmMmFullscreen('${tableId}','${groupKey} Level — Active Properties by Category${propFilter ? " (" + propFilter + ")" : ""}')">⛶ Fullscreen</button>
+      </div>`;
   }
 
-  // Task 4: Washroom/Resting stats per NM and MM
+  // Washroom/Resting stats
   const WASHROOM_TYPES = ["Resting + Washroom", "Washroom"];
   const RESTING_TYPES  = ["Resting + Washroom", "Resting"];
 
   function buildWrStats(groupKey, label) {
-    // Use hoods as source of truth for all NM/MM values
     const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
     const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
     const total  = groups.length;
@@ -2107,13 +2110,15 @@ function renderNmMmSummary() {
 
     const withWashroom  = groups.filter(g => activeData.some(r => r[groupKey] === g && WASHROOM_TYPES.includes(r["Closure type"] || "")));
     const withResting   = groups.filter(g => activeData.some(r => r[groupKey] === g && RESTING_TYPES.includes(r["Closure type"] || "")));
+    const withBoth      = groups.filter(g => withWashroom.includes(g) && withResting.includes(g));
     const noWashroom    = groups.filter(g => !withWashroom.includes(g));
     const noResting     = groups.filter(g => !withResting.includes(g));
+    const withNeither   = groups.filter(g => !withWashroom.includes(g) && !withResting.includes(g));
 
     const pct = (n) => total ? `(${(n / total * 100).toFixed(1)}%)` : "(0%)";
 
-    const cardHtml = (title, count, pctStr, colorClass, kind, gKey) =>
-      `<div class="wr-card" onclick="showWrHighlight('${kind}','${gKey}',this)" style="border-left:4px solid ${colorClass}">
+    const cardHtml = (title, count, pctStr, borderColor, bgColor, kind, gKey) =>
+      `<div class="wr-card" onclick="showWrHighlight('${kind}','${gKey}',this)" style="border-left:4px solid ${borderColor};background:${bgColor}">
         <div class="wr-card-title">${escHtml(title)}</div>
         <div class="wr-card-value">${count} <span class="wr-card-pct">${pctStr}</span></div>
         <div class="wr-card-label">of ${total} total ${label}s</div>
@@ -2121,22 +2126,38 @@ function renderNmMmSummary() {
 
     const statsHtml = `
       <div class="washroom-resting-grid">
-        ${cardHtml(`${label}s with Washroom`, withWashroom.length, pct(withWashroom.length), "#2196f3", "withWashroom", groupKey)}
-        ${cardHtml(`${label}s with Resting`, withResting.length, pct(withResting.length), "#4caf50", "withResting", groupKey)}
+        ${cardHtml(`${label}s with Washroom`,              withWashroom.length, pct(withWashroom.length), "#2196f3", "#f0f8ff", "withWashroom", groupKey)}
+        ${cardHtml(`${label}s with Resting`,               withResting.length,  pct(withResting.length),  "#4caf50", "#f0fff4", "withResting",  groupKey)}
+        ${cardHtml(`${label}s with Washroom & Resting`,    withBoth.length,     pct(withBoth.length),     "#9c27b0", "#faf0ff", "withBoth",     groupKey)}
       </div>
       <hr class="wr-divider"/>
       <div class="washroom-resting-grid">
-        ${cardHtml(`${label}s without Washroom`, noWashroom.length, pct(noWashroom.length), "#e53935", "noWashroom", groupKey)}
-        ${cardHtml(`${label}s without Resting`, noResting.length, pct(noResting.length), "#ff9800", "noResting", groupKey)}
+        ${cardHtml(`${label}s without Washroom`,           noWashroom.length,   pct(noWashroom.length),   "#e53935", "#fff5f5", "noWashroom",   groupKey)}
+        ${cardHtml(`${label}s without Resting`,            noResting.length,    pct(noResting.length),    "#ff9800", "#fffbf0", "noResting",    groupKey)}
+        ${cardHtml(`${label}s without Washroom & Resting`, withNeither.length,  pct(withNeither.length),  "#546e7a", "#f4f6f7", "withNeither",  groupKey)}
       </div>`;
 
-    return { statsHtml, withWashroom, withResting, noWashroom, noResting, total, groups };
+    return { statsHtml, withWashroom, withResting, withBoth, noWashroom, noResting, withNeither, total, groups };
   }
 
   const nmStats = buildWrStats("NM", "NM");
   const mmStats = buildWrStats("MM", "MM");
 
+  const totalNMs = [...new Set(hoods.map(h => h.nano_market).filter(Boolean))].length;
+  const totalMMs = [...new Set(hoods.map(h => h.micro_market).filter(Boolean))].length;
+
   container.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:12px;font-weight:600;color:#555">🔍 Filter by Property:</span>
+      <select id="nmMmPropertyFilter" onchange="renderNmMmSummary()"
+              style="padding:6px 10px;border-radius:8px;border:1px solid #ddd;font-size:13px;min-width:160px">
+        <option value="" ${!propFilter ? "selected" : ""}>All Properties</option>
+        <option value="Public"  ${propFilter === "Public"  ? "selected" : ""}>Public</option>
+        <option value="Private" ${propFilter === "Private" ? "selected" : ""}>Private</option>
+      </select>
+      ${propFilter ? `<span style="background:#e8f0fe;color:#3b5bdb;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600">Showing: ${propFilter}</span>` : ""}
+    </div>
+
     <div class="nm-mm-grid" style="margin-bottom:24px">
       <div class="nm-mm-panel">
         <h4>NM Level — Active Properties by Category</h4>
@@ -2151,12 +2172,12 @@ function renderNmMmSummary() {
     <div class="nm-mm-grid">
       <div class="nm-mm-panel">
         <h4>NM Washroom &amp; Resting Coverage</h4>
-        <div style="font-size:11px;color:#888;margin-bottom:10px">Total NMs: <b>${[...new Set(hoods.map(h => h.nano_market).filter(Boolean))].length}</b></div>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total NMs (from hoods): <b>${totalNMs}</b></div>
         ${nmStats.statsHtml}
       </div>
       <div class="nm-mm-panel">
         <h4>MM Washroom &amp; Resting Coverage</h4>
-        <div style="font-size:11px;color:#888;margin-bottom:10px">Total MMs: <b>${[...new Set(hoods.map(h => h.micro_market).filter(Boolean))].length}</b></div>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total MMs (from hoods): <b>${totalMMs}</b></div>
         ${mmStats.statsHtml}
       </div>
     </div>
@@ -2172,20 +2193,20 @@ function renderNmMmSummary() {
 }
 
 function showWrHighlight(kind, groupKey, clickedEl) {
-  // Deactivate other cards in same panel
   clickedEl.closest(".nm-mm-panel").querySelectorAll(".wr-card").forEach(c => c.classList.remove("active"));
   clickedEl.classList.add("active");
 
   const stats = groupKey === "NM" ? window._wrStatsNM : window._wrStatsMM;
   const groups = stats[kind] || [];
-  const tableId = groupKey === "NM" ? "nmActiveTable" : "mmActiveTable";
   const label = groupKey === "NM" ? "NM" : "MM";
 
   const kindLabel = {
     withWashroom: `${label}s with Washroom`,
     withResting:  `${label}s with Resting`,
+    withBoth:     `${label}s with Washroom & Resting`,
     noWashroom:   `${label}s without Washroom`,
-    noResting:    `${label}s without Resting`
+    noResting:    `${label}s without Resting`,
+    withNeither:  `${label}s without any Washroom or Resting`
   }[kind] || kind;
 
   const card = document.getElementById("wrHighlightCard");
@@ -2195,6 +2216,51 @@ function showWrHighlight(kind, groupKey, clickedEl) {
     : `<div style="color:#aaa">None</div>`;
   card.style.display = "block";
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function openNmMmFullscreen(tableId, title) {
+  const srcTable = document.getElementById(tableId);
+  if (!srcTable) return;
+
+  // Create overlay
+  const overlay = document.createElement("div");
+  overlay.id = "nmMmFullscreenOverlay";
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;
+    display:flex;align-items:flex-start;justify-content:center;padding:24px;box-sizing:border-box;
+  `;
+
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;width:100%;max-width:1400px;max-height:calc(100vh - 48px);
+                display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  padding:14px 20px;border-bottom:1px solid #eee;flex-shrink:0">
+        <h3 style="margin:0;font-size:15px;color:#333">${escHtml(title)}</h3>
+        <div style="display:flex;gap:8px">
+          <button class="summary-dl-btn" onclick="downloadSummaryTable('${tableId}_fs','${tableId}_fullscreen')">⬇ CSV</button>
+          <button onclick="document.getElementById('nmMmFullscreenOverlay').remove()"
+                  style="background:#e74c3c;color:#fff;border:none;border-radius:8px;
+                         padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600">✕ Close</button>
+        </div>
+      </div>
+      <div style="overflow:auto;flex:1;padding:16px">
+        <div id="nmMmFsTableWrap"></div>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  // Clone table into fullscreen with new id
+  const clone = srcTable.cloneNode(true);
+  clone.id = tableId + "_fs";
+  clone.style.minWidth = srcTable.style.minWidth;
+  document.getElementById("nmMmFsTableWrap").appendChild(clone);
+
+  // Close on backdrop click
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+  // Close on Escape
+  const escHandler = (e) => { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", escHandler); } };
+  document.addEventListener("keydown", escHandler);
 }
 
 // ============================================================
