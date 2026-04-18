@@ -1,27 +1,32 @@
+// ============================================================
+// GLOBALS
+// ============================================================
 let map;
 let currentRow = null;
 let allData = [];
 let hoods = [];
-let markers = [];
+
+// MapLibre uses source/layer IDs instead of Leaflet marker arrays.
+// We keep arrays of popup/marker objects for property pins (DOM markers).
+let propertyMarkers   = [];   // maplibregl.Marker[]
+let hotspotMarkers    = [];
+let demandMarkers     = [];
+let idleMarkers       = [];
+let centroidMarkers   = [];
+
 let activeFilters = {};
 
-// ── Add-Point mode ──────────────────────────────────────────
+// Add-Point mode
 let addPointMode = false;
-let addPointMarker = null;
-let hoodLayers = [];
+let addPointMarker = null;  // maplibregl.Marker
 
-// ── Extra layer data & markers ──────────────────────────────
-let hotspotData      = [];
-let demandData       = [];
-let idleData         = [];
-let centroidData     = [];
+// Extra layer data
+let hotspotData   = [];
+let demandData    = [];
+let idleData      = [];
+let centroidData  = [];
 
-let hotspotMarkers   = [];
-let demandMarkers    = [];
-let idleMarkers      = [];
-let centroidMarkers  = [];
-
-// ── Layer visibility state (legend toggles) ─────────────────
+// Layer visibility (legend toggles)
 const layerVisible = {
   hoods:      true,
   properties: true,
@@ -31,32 +36,55 @@ const layerVisible = {
   centroids:  false
 };
 
+const MAP_STYLES = {
+  street: "https://tiles.openfreemap.org/styles/liberty",
+  light:  "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+  dark:   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  basic:  "https://demotiles.maplibre.org/style.json"
+};
+// Search
+let searchMarker = null;
+let searchDebounceTimer = null;
+
+// MapLibre source/layer IDs for heatmaps
+const DEMAND_SOURCE = "demand-source";
+const DEMAND_LAYER  = "demand-heat";
+const IDLE_SOURCE   = "idle-source";
+const IDLE_LAYER    = "idle-heat";
+const HOODS_SOURCE  = "hoods-source";
+const HOODS_FILL    = "hoods-fill";
+const HOODS_LINE    = "hoods-line";
+
 console.log("🚀 App initializing...");
 init();
 
+// ============================================================
+// INIT
+// ============================================================
 async function init() {
-  map = L.map('map').setView([12.9, 77.65], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-  setTimeout(() => map.invalidateSize(), 300);
+  map = new maplibregl.Map({
+    container: "map",
+    style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    center: [77.65, 12.9],
+    zoom: 12,
+    attributionControl: true
+  });
 
-  // hoods = await fetch("hoods.json").then(r => r.json());
-  // NEW — fetch from the sheet instead:
+  // Wait for map to finish loading before adding sources/layers
+  await new Promise(resolve => map.on("load", resolve));
 
+  // Load hoods
   hoods = await fetch(CONFIG.API_URL + "?action=getHoods&t=" + Date.now(), {
     credentials: "omit"
-  }).then(r => r.json());
+  }).then(r => r.json()).catch(() => ([]));
 
-  if (hoods.error) {
-    console.error("❌ Failed to load hoods from sheet:", hoods.error);
-    // hoods = [];
-    hoods = await fetch("hoods.json").then(r => r.json());
+  if (!Array.isArray(hoods) || hoods.error) {
+    console.error("❌ Failed to load hoods from sheet, trying hoods.json");
+    hoods = await fetch("hoods.json").then(r => r.json()).catch(() => []);
     console.log(`📦 hoods.json loaded — ${hoods.length} hoods`);
   } else {
     console.log(`📦 hoods loaded from sheet — ${hoods.length} hoods`);
   }
-
-
-  
 
   drawHoods();
   buildLegend();
@@ -64,37 +92,152 @@ async function init() {
   await loadData();
   await loadExtraLayers();
 
-  // ── NO auto-refresh intervals — manual only ──────────────
-
   initMapSearch();
 
+  // Map click handler
   map.on("click", function (e) {
     if (addPointMode) {
-      openAddPointModal(e.latlng.lat, e.latlng.lng);
+      openAddPointModal(e.lngLat.lat, e.lngLat.lng);
       return;
     }
 
     // Show a copyable lat/long popup on every normal click
-    const { lat, lng } = e.latlng;
+    const lat = e.lngLat.lat, lng = e.lngLat.lng;
     const coordStr = `${lat.toFixed(7)}, ${lng.toFixed(7)}`;
-    L.popup({ closeButton: true, className: "latlng-popup" })
-      .setLatLng(e.latlng)
-      .setContent(`
-        <div style="font-size:13px;line-height:1.6">
-          <div style="font-weight:600;margin-bottom:4px">📌 Coordinates</div>
-          <code style="background:#f4f4f4;padding:3px 7px;border-radius:4px;font-size:12px;display:block;margin-bottom:8px">${lat.toFixed(7)}, ${lng.toFixed(7)}</code>
-          <button onclick="
-            navigator.clipboard.writeText('${coordStr}')
-              .then(() => { this.textContent='✅ Copied!'; setTimeout(()=>this.textContent='📋 Copy',1500); })
-              .catch(() => { this.textContent='❌ Failed'; setTimeout(()=>this.textContent='📋 Copy',1500); });
-          " style="
-            width:100%;padding:5px 0;border:none;border-radius:5px;
-            background:#2980b9;color:#fff;font-size:12px;font-weight:600;cursor:pointer
-          ">📋 Copy</button>
-        </div>
-      `)
-      .openOn(map);
+    const popupEl = document.createElement("div");
+    popupEl.style.cssText = "font-size:13px;line-height:1.6";
+    popupEl.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px">📌 Coordinates</div>
+      <code style="background:#f4f4f4;padding:3px 7px;border-radius:4px;font-size:12px;display:block;margin-bottom:8px">${lat.toFixed(7)}, ${lng.toFixed(7)}</code>
+      <button onclick="
+        navigator.clipboard.writeText('${coordStr}')
+          .then(() => { this.textContent='✅ Copied!'; setTimeout(()=>this.textContent='📋 Copy',1500); })
+          .catch(() => { this.textContent='❌ Failed'; setTimeout(()=>this.textContent='📋 Copy',1500); });
+      " style="
+        width:100%;padding:5px 0;border:none;border-radius:5px;
+        background:#2980b9;color:#fff;font-size:12px;font-weight:600;cursor:pointer
+      ">📋 Copy</button>
+    `;
+    new maplibregl.Popup({ closeButton: true })
+      .setLngLat([lng, lat])
+      .setDOMContent(popupEl)
+      .addTo(map);
   });
+
+  // Hood polygon clicks
+  map.on("click", HOODS_FILL, function (e) {
+    const hoodId = e.features[0]?.properties?.hood_id;
+    const hood = hoods.find(h => h.hood_id === hoodId);
+    if (hood) showHoodDetails(hood);
+  });
+  map.on("mouseenter", HOODS_FILL, () => map.getCanvas().style.cursor = "pointer");
+  map.on("mouseleave", HOODS_FILL, () => map.getCanvas().style.cursor = "");
+}
+
+function switchBaseMap(styleKey, event) {
+  document.querySelectorAll(".style-btn").forEach(b => b.classList.remove("active"));
+  if (event) event.target.classList.add("active");
+
+  const styleUrl = MAP_STYLES[styleKey];
+  if (!styleUrl) return;
+
+  map.setStyle(styleUrl);
+
+  map.once("styledata", async () => {
+    drawHoods();
+    await loadExtraLayers();
+    renderMarkers();
+    buildLegend();
+  });
+}
+// ============================================================
+// HOODS — drawn as MapLibre fill + line layers
+// ============================================================
+function drawHoods() {
+  const features = hoods
+    .filter(h => h.geometry)
+    .map(h => ({
+      type: "Feature",
+      geometry: h.geometry,
+      properties: {
+        hood_id:     h.hood_id     || "",
+        nano_market: h.nano_market || "",
+        micro_market: h.micro_market || "",
+        region:      h.region      || ""
+      }
+    }));
+
+  const geojson = { type: "FeatureCollection", features };
+
+  if (map.getSource(HOODS_SOURCE)) {
+    map.getSource(HOODS_SOURCE).setData(geojson);
+    return;
+  }
+
+  map.addSource(HOODS_SOURCE, { type: "geojson", data: geojson });
+
+  map.addLayer({
+    id: HOODS_FILL,
+    type: "fill",
+    source: HOODS_SOURCE,
+    paint: {
+      "fill-color": "#4da6ff",
+      "fill-opacity": 0.15
+    }
+  });
+
+  map.addLayer({
+    id: HOODS_LINE,
+    type: "line",
+    source: HOODS_SOURCE,
+    paint: {
+      "line-color": "#0055cc",
+      "line-width": 1
+    }
+  });
+}
+
+function updateHoodVisibility() {
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  const noFilter = !filterNM && !filterMM;
+
+  if (!map.getLayer(HOODS_FILL)) return;
+
+  if (!layerVisible.hoods) {
+    map.setLayoutProperty(HOODS_FILL, "visibility", "none");
+    map.setLayoutProperty(HOODS_LINE, "visibility", "none");
+    return;
+  }
+
+  map.setLayoutProperty(HOODS_FILL, "visibility", "visible");
+  map.setLayoutProperty(HOODS_LINE, "visibility", "visible");
+
+  if (!noFilter) {
+    // Filter by NM and/or MM using MapLibre expression
+    const expr = ["all"];
+    if (filterNM) expr.push(["==", ["get", "nano_market"],  filterNM]);
+    if (filterMM) expr.push(["==", ["get", "micro_market"], filterMM]);
+    map.setFilter(HOODS_FILL, expr);
+    map.setFilter(HOODS_LINE, expr);
+  } else {
+    map.setFilter(HOODS_FILL, null);
+    map.setFilter(HOODS_LINE, null);
+  }
+}
+
+function assignHood(coords) {
+  const pt = turf.point([coords.lng, coords.lat]);
+  let nearest = null, minDist = Infinity;
+  for (let h of hoods) {
+    const polygon = { type: "Feature", geometry: h.geometry };
+    try {
+      if (turf.booleanPointInPolygon(pt, polygon)) return h;
+      const dist = turf.distance(pt, turf.centroid(polygon));
+      if (dist < minDist) { minDist = dist; nearest = h; }
+    } catch (e) {}
+  }
+  return nearest;
 }
 
 // ============================================================
@@ -108,8 +251,8 @@ function buildLegend() {
     { key: "hoods",      color: "#4da6ff", symbol: "■", label: "Hood Polygons"   },
     { key: "properties", color: "#e74c3c", symbol: "📍", label: "Properties"     },
     { key: "hotspots",   color: "#f39c12", symbol: "H",  label: "Hotspots"       },
-    { key: "demand",     color: "#2980b9", symbol: "●",  label: "Demand (size = point count)"  },
-    { key: "idle",       color: "#c0392b", symbol: "●",  label: "Idle (size = idle minutes)"    },
+    { key: "demand",     color: "#2980b9", symbol: "🌊", label: "Demand Heatmap" },
+    { key: "idle",       color: "#c0392b", symbol: "🔥", label: "Idle Heatmap"   },
     { key: "centroids",  color: "#27ae60", symbol: "C",  label: "Demand Centroids"}
   ];
 
@@ -118,7 +261,7 @@ function buildLegend() {
       <div class="legend-item" id="legend_${item.key}" onclick="toggleLayer('${item.key}')" style="cursor:pointer">
         <span class="legend-symbol" style="color:${item.color};font-weight:bold">${item.symbol}</span>
         <span class="legend-label">${item.label}</span>
-        <span class="legend-eye" id="eye_${item.key}">👁</span>
+        <span class="legend-eye" id="eye_${item.key}">${layerVisible[item.key] ? "👁" : "🚫"}</span>
       </div>
     `).join("");
 }
@@ -131,24 +274,33 @@ function toggleLayer(key) {
   if (item) item.style.opacity = layerVisible[key] ? "1" : "0.4";
 
   if (key === "hoods") {
-    hoodLayers.forEach(({ layer }) => {
-      layerVisible.hoods ? map.addLayer(layer) : map.removeLayer(layer);
-    });
+    updateHoodVisibility();
   }
   if (key === "properties") {
-    markers.forEach(m => layerVisible.properties ? map.addLayer(m) : map.removeLayer(m));
+    propertyMarkers.forEach(m => {
+      const el = m.getElement();
+      el.style.display = layerVisible.properties ? "" : "none";
+    });
   }
   if (key === "hotspots") {
-    hotspotMarkers.forEach(m => layerVisible.hotspots ? map.addLayer(m) : map.removeLayer(m));
+    hotspotMarkers.forEach(m => {
+      m.getElement().style.display = layerVisible.hotspots ? "" : "none";
+    });
   }
   if (key === "demand") {
-    demandMarkers.forEach(m => layerVisible.demand ? map.addLayer(m) : map.removeLayer(m));
+    if (map.getLayer(DEMAND_LAYER)) {
+      map.setLayoutProperty(DEMAND_LAYER, "visibility", layerVisible.demand ? "visible" : "none");
+    }
   }
   if (key === "idle") {
-    idleMarkers.forEach(m => layerVisible.idle ? map.addLayer(m) : map.removeLayer(m));
+    if (map.getLayer(IDLE_LAYER)) {
+      map.setLayoutProperty(IDLE_LAYER, "visibility", layerVisible.idle ? "visible" : "none");
+    }
   }
   if (key === "centroids") {
-    centroidMarkers.forEach(m => layerVisible.centroids ? map.addLayer(m) : map.removeLayer(m));
+    centroidMarkers.forEach(m => {
+      m.getElement().style.display = layerVisible.centroids ? "" : "none";
+    });
   }
 }
 
@@ -177,62 +329,7 @@ async function loadLayer(url, name, renderFn) {
   }
 }
 
-// ── Icon factories ───────────────────────────────────────────
-function letterIcon(letter, bg, textColor = "#fff") {
-  return L.divIcon({
-    className: "",
-    html: `<div style="
-      background:${bg};color:${textColor};border-radius:50%;
-      width:24px;height:24px;display:flex;align-items:center;
-      justify-content:center;font-weight:700;font-size:13px;
-      border:2px solid rgba(0,0,0,0.25);box-shadow:0 1px 3px rgba(0,0,0,0.3)
-    ">${letter}</div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12]
-  });
-}
-
-function dotIcon(color) {
-  return L.divIcon({
-    className: "",
-    html: `<div style="
-      background:${color};border-radius:50%;
-      width:10px;height:10px;
-      border:1.5px solid rgba(0,0,0,0.3);
-      box-shadow:0 1px 3px rgba(0,0,0,0.3)
-    "></div>`,
-    iconSize: [10, 10],
-    iconAnchor: [5, 5]
-  });
-}
-
-// Scaled dot icon — size and color intensity vary with value.
-function scaledDotIcon(value, min, max, hLow, hHigh) {
-  const MIN_R = 5, MAX_R = 22;
-  const t = (max > min) ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5;
-  const r = Math.round(MIN_R + t * (MAX_R - MIN_R));
-  const hue  = Math.round(hLow + t * (hHigh - hLow));
-  const sat  = 85;
-  const lite = Math.round(72 - t * 47);
-  const color = `hsl(${hue},${sat}%,${lite}%)`;
-  const borderAlpha = (0.2 + t * 0.5).toFixed(2);
-
-  return L.divIcon({
-    className: "",
-    html: `<div style="
-      background:${color};
-      border-radius:50%;
-      width:${r*2}px;height:${r*2}px;
-      border:1.5px solid rgba(0,0,0,${borderAlpha});
-      box-shadow:0 1px 4px rgba(0,0,0,${(0.2+t*0.3).toFixed(2)});
-      opacity:0.88;
-    "></div>`,
-    iconSize: [r*2, r*2],
-    iconAnchor: [r, r]
-  });
-}
-
-// ── NM/MM lookup for extra-layer rows ────────────────────────
+// ── NM/MM lookup for extra-layer rows ───────────────────────
 function stampHoodInfo(rows, latKey, lngKey) {
   rows.forEach(row => {
     if (row._nm) return;
@@ -246,7 +343,6 @@ function stampHoodInfo(rows, latKey, lngKey) {
   });
 }
 
-// Returns true if the row should be visible given current NM/MM filters
 function passesNMMFilter(row) {
   const filterNM = activeFilters.NM || "";
   const filterMM = activeFilters.MM || "";
@@ -256,119 +352,184 @@ function passesNMMFilter(row) {
   return true;
 }
 
-// ── Render functions (filter-aware) ──────────────────────────
+// ── Helper: create a letter-badge DOM marker ────────────────
+function createLetterMarker(lat, lng, letter, bg, popupHtml, extraRow) {
+  const el = document.createElement("div");
+  el.style.cssText = `
+    background:${bg};color:#fff;border-radius:50%;
+    width:24px;height:24px;display:flex;align-items:center;
+    justify-content:center;font-weight:700;font-size:13px;
+    border:2px solid rgba(0,0,0,0.25);box-shadow:0 1px 3px rgba(0,0,0,0.3);
+    cursor:pointer;
+  `;
+  el.textContent = letter;
+  el._extraRow = extraRow;
+
+  const popup = new maplibregl.Popup({ offset: 14, closeButton: true })
+    .setHTML(popupHtml);
+
+  const marker = new maplibregl.Marker({ element: el })
+    .setLngLat([lng, lat])
+    .setPopup(popup);
+
+  return marker;
+}
+
+// ── Render Hotspots ──────────────────────────────────────────
 function renderHotspots(data) {
-  hotspotMarkers.forEach(m => map.removeLayer(m));
+  hotspotMarkers.forEach(m => m.remove());
   hotspotMarkers = [];
   hotspotData = data;
   stampHoodInfo(data, "lat", "lng");
+
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const m = L.marker([lat, lng], { icon: letterIcon("H", "#f39c12") })
-      .bindPopup(`<b>🔥 ${row.name || "Hotspot"}</b><br>Hood: ${row.hood || "-"}<br>Cluster: ${row.cluster || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
-    m._extraRow = row;
+    const html = `<b>🔥 ${row.name || "Hotspot"}</b><br>Hood: ${row.hood || "-"}<br>Cluster: ${row.cluster || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`;
+    const m = createLetterMarker(lat, lng, "H", "#f39c12", html, row);
     if (layerVisible.hotspots && passesNMMFilter(row)) m.addTo(map);
     hotspotMarkers.push(m);
   });
   console.log(`📍 ${hotspotMarkers.length} hotspot markers`);
 }
 
+// ── Render Demand as real heatmap ────────────────────────────
 function renderDemand(data) {
-  demandMarkers.forEach(m => map.removeLayer(m));
-  demandMarkers = [];
   demandData = data;
   stampHoodInfo(data, "lat", "lng");
 
-  const vals = data.map(r => parseFloat(r.num_points)).filter(v => !isNaN(v));
-  const minV = vals.length ? Math.min(...vals) : 0;
-  const maxV = vals.length ? Math.max(...vals) : 1;
+  const geo = toGeoJSON(data, "num_points", "lat", "lng");
 
-  data.forEach(row => {
-    const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
-    if (isNaN(lat) || isNaN(lng)) return;
-    const numPts = parseFloat(row.num_points) || 0;
-    const icon = scaledDotIcon(numPts, minV, maxV, 200, 220);
-    const m = L.marker([lat, lng], { icon })
-      .bindPopup(`
-        <b>📦 Demand</b><br>
-        Cluster: ${row.cluster || "-"}<br>
-        Points: ${row.num_points || "-"}<br>
-        NM: ${row._nm || "-"}<br>
-        MM: ${row._mm || "-"}
-      `);
-    m._extraRow = row;
-    if (layerVisible.demand && passesNMMFilter(row)) m.addTo(map);
-    demandMarkers.push(m);
+  if (map.getSource(DEMAND_SOURCE)) {
+    map.getSource(DEMAND_SOURCE).setData(geo);
+    return;
+  }
+
+  map.addSource(DEMAND_SOURCE, { type: "geojson", data: geo });
+
+  map.addLayer({
+    id: DEMAND_LAYER,
+    type: "heatmap",
+    source: DEMAND_SOURCE,
+    layout: { visibility: layerVisible.demand ? "visible" : "none" },
+    paint: {
+    "heatmap-weight": 1,
+    "heatmap-intensity": 1,
+    "heatmap-radius": 20,
+
+    "heatmap-color": [
+      "interpolate", ["linear"], ["heatmap-density"],
+      0,   "rgba(0,0,255,0)",
+      0.2, "rgba(0,0,255,0.3)",
+      0.4, "rgba(0,0,255,0.6)",
+      0.7, "rgba(0,0,180,0.8)",
+      1,   "rgba(0,0,100,1)"
+    ],
+
+    "heatmap-opacity": 0.8
+  }
   });
-  console.log(`📍 ${demandMarkers.length} demand markers (scaled by num_points, min:${minV} max:${maxV})`);
+  console.log(`🌊 Demand heatmap rendered — ${data.length} points`);
 }
 
+// ── Render Idle as real heatmap ──────────────────────────────
 function renderIdle(data) {
-  idleMarkers.forEach(m => map.removeLayer(m));
-  idleMarkers = [];
   idleData = data;
   stampHoodInfo(data, "lat", "lng");
 
-  const vals = data.map(r => parseFloat(r.idle_min)).filter(v => !isNaN(v));
-  const minV = vals.length ? Math.min(...vals) : 0;
-  const maxV = vals.length ? Math.max(...vals) : 1;
+  const geo = toGeoJSON(data, "idle_min", "lat", "lng");
 
-  data.forEach(row => {
-    const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
-    if (isNaN(lat) || isNaN(lng)) return;
-    const idleMin = parseFloat(row.idle_min) || 0;
-    const icon = scaledDotIcon(idleMin, minV, maxV, 5, 0);
-    const m = L.marker([lat, lng], { icon })
-      .bindPopup(`
-        <b>🚗 Idle</b><br>
-        Cluster: ${row.cluster || "-"}<br>
-        Hood: ${row.hood || "-"}<br>
-        Idle min: ${row.idle_min || "-"}<br>
-        NM: ${row._nm || "-"}<br>
-        MM: ${row._mm || "-"}
-      `);
-    m._extraRow = row;
-    if (layerVisible.idle && passesNMMFilter(row)) m.addTo(map);
-    idleMarkers.push(m);
+  if (map.getSource(IDLE_SOURCE)) {
+    map.getSource(IDLE_SOURCE).setData(geo);
+    return;
+  }
+
+  map.addSource(IDLE_SOURCE, { type: "geojson", data: geo });
+
+  map.addLayer({
+    id: IDLE_LAYER,
+    type: "heatmap",
+    source: IDLE_SOURCE,
+    layout: { visibility: layerVisible.idle ? "visible" : "none" },
+    paint: {
+    "heatmap-weight": 1,
+    "heatmap-intensity": 1,
+    "heatmap-radius": 20,
+
+    "heatmap-color": [
+      "interpolate", ["linear"], ["heatmap-density"],
+      0,   "rgba(255,0,0,0)",
+      0.3, "rgba(172, 7, 7, 0.4)",
+      0.6, "rgba(113, 3, 3, 0.7)",
+      1,   "rgb(69, 3, 3)"
+    ],
+
+    "heatmap-opacity": 0.8
+  }
   });
-  console.log(`📍 ${idleMarkers.length} idle markers (scaled by idle_min, min:${minV} max:${maxV})`);
+  console.log(`🔥 Idle heatmap rendered — ${data.length} points`);
 }
 
+// ── Render Centroids ─────────────────────────────────────────
 function renderCentroids(data) {
-  centroidMarkers.forEach(m => map.removeLayer(m));
+  centroidMarkers.forEach(m => m.remove());
   centroidMarkers = [];
   centroidData = data;
   stampHoodInfo(data, "centroid_lat", "centroid_lng");
+
   data.forEach(row => {
     const lat = parseFloat(row.centroid_lat), lng = parseFloat(row.centroid_lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const m = L.marker([lat, lng], { icon: letterIcon("C", "#27ae60") })
-      .bindPopup(`<b>📊 ${row.hood_name || "Centroid"}</b><br>Cluster ID: ${row.cluster_id || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`);
-    m._extraRow = row;
+    const html = `<b>📊 ${row.hood_name || "Centroid"}</b><br>Cluster ID: ${row.cluster_id || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`;
+    const m = createLetterMarker(lat, lng, "C", "#27ae60", html, row);
     if (layerVisible.centroids && passesNMMFilter(row)) m.addTo(map);
     centroidMarkers.push(m);
   });
   console.log(`📍 ${centroidMarkers.length} centroid markers`);
 }
 
-// ── Filter extra layers by NM/MM ─────────────────────────────
-function filterExtraLayers() {
-  const sets = [
-    { markerList: hotspotMarkers,  visKey: "hotspots"  },
-    { markerList: demandMarkers,   visKey: "demand"    },
-    { markerList: idleMarkers,     visKey: "idle"      },
-    { markerList: centroidMarkers, visKey: "centroids" },
-  ];
-  sets.forEach(({ markerList, visKey }) => {
-    markerList.forEach(m => {
-      const show = layerVisible[visKey] && passesNMMFilter(m._extraRow || {});
-      show ? (map.hasLayer(m) || m.addTo(map)) : (map.hasLayer(m) && map.removeLayer(m));
-    });
-  });
+// Convert flat array to GeoJSON FeatureCollection
+function toGeoJSON(data, valueKey, latKey, lngKey) {
+  return {
+    type: "FeatureCollection",
+    features: data
+      .filter(r => !isNaN(parseFloat(r[latKey])) && !isNaN(parseFloat(r[lngKey])))
+      .map(r => ({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [parseFloat(r[lngKey]), parseFloat(r[latKey])]
+        },
+        properties: {
+          value:   parseFloat(r[valueKey]) || 0,
+          cluster: r.cluster || "",
+          hood:    r.hood    || ""
+        }
+      }))
+  };
 }
 
-// ── Filtered data getters for downloads ──────────────────────
+// Filter extra layer markers by NM/MM
+function filterExtraLayers() {
+  hotspotMarkers.forEach(m => {
+    const show = layerVisible.hotspots && passesNMMFilter(m.getElement()._extraRow || {});
+    show ? m.addTo(map) : m.remove();
+  });
+  centroidMarkers.forEach(m => {
+    const show = layerVisible.centroids && passesNMMFilter(m.getElement()._extraRow || {});
+    show ? m.addTo(map) : m.remove();
+  });
+  // Demand/idle heatmaps: re-render with filtered data
+  if (map.getSource(DEMAND_SOURCE)) {
+    const filtered = demandData.filter(passesNMMFilter);
+    map.getSource(DEMAND_SOURCE).setData(toGeoJSON(filtered, "num_points", "lat", "lng"));
+  }
+  if (map.getSource(IDLE_SOURCE)) {
+    const filtered = idleData.filter(passesNMMFilter);
+    map.getSource(IDLE_SOURCE).setData(toGeoJSON(filtered, "idle_min", "lat", "lng"));
+  }
+}
+
 function getFilteredHotspots()  { return hotspotData.filter(passesNMMFilter);  }
 function getFilteredDemand()    { return demandData.filter(passesNMMFilter);    }
 function getFilteredIdle()      { return idleData.filter(passesNMMFilter);      }
@@ -387,20 +548,15 @@ async function loadData() {
     allData = data;
     console.log(`✅ ${allData.length} rows loaded`);
 
-    // Render markers — preserve current zoom/pan, no fitBounds
     if (Object.values(activeFilters).some(v => v)) {
       filterAndRender();
     } else {
       renderMarkers();
     }
 
-    // Sheet preview — re-apply sheet filters if active
     const sfActive = Object.values(getSheetFilters()).some(v => v);
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
-
     renderSummaryTables();
-    // NOTE: renderIncentiveTables() is NOT called automatically here.
-    // User must click Apply in the Incentive Tracker or use the Recalculate button.
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -408,99 +564,62 @@ async function loadData() {
 }
 
 // ============================================================
-// RECALCULATE HOTSPOT DATA (manual trigger only)
+// RECALCULATE HOTSPOT DATA
 // ============================================================
 async function recalculateHotspots() {
   const btn = document.getElementById("btnRecalcHotspots");
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "⏳ Recalculating…";
-  }
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ Recalculating…"; }
   const statusEl = document.getElementById("recalcStatus");
-  if (statusEl) {
-    statusEl.textContent = "Fetching & enriching hotspot data from server…";
-    statusEl.style.color = "#555";
-  }
+  if (statusEl) { statusEl.textContent = "Fetching & enriching hotspot data from server…"; statusEl.style.color = "#555"; }
   try {
-    // GET with no-cors isn't readable either — use a JSONP-style workaround:
-    // Apps Script GET responses are readable when fetched with credentials omitted
-    // and the script is deployed as "anyone, even anonymous".
-    const url  = CONFIG.API_URL + "?recalc=1&t=" + Date.now();
-    const res  = await fetch(url, {
-      method: "GET",
-      redirect: "follow",         // follow the Apps Script redirect chain
-      credentials: "omit",        // don't send cookies — avoids preflight
-    });
-
+    const url = CONFIG.API_URL + "?recalc=1&t=" + Date.now();
+    const res = await fetch(url, { method: "GET", redirect: "follow", credentials: "omit" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-
     if (!Array.isArray(data)) throw new Error(data.error || "Unexpected response");
 
-    if (statusEl) {
-      statusEl.textContent = `⏳ Writing ${data.length} enriched rows back to sheet…`;
-    }
+    if (statusEl) statusEl.textContent = `⏳ Writing ${data.length} enriched rows back to sheet…`;
 
-    const ENRICHED_COLS = [
-      "nearest hotspot",
-      "displacement to nearest hotspot",
-      "demand count",
-      "idle count",
-      "launch feasibility"
-    ];
-
-    // Fire all POSTs with no-cors — we don't need to read the response,
-    // we just need the write to land. Apps Script POST always redirects,
-    // which blocks response reading, but the write still completes.
-    const writes = data
-      .filter(row => row._rowIndex)
-      .map(row => {
-        const payload = { _rowIndex: row._rowIndex };
-        ENRICHED_COLS.forEach(col => {
-          if (row[col] !== undefined) payload[col] = row[col];
-        });
-        return fetch(CONFIG.API_URL, {
-          method: "POST",
-          mode: "no-cors",        // ← suppresses the CORS error on POST responses
-          credentials: "omit",
-          body: JSON.stringify(payload)
-        });
-      });
-
+    const ENRICHED_COLS = ["nearest hotspot","displacement to nearest hotspot","demand count","idle count","launch feasibility"];
+    const writes = data.filter(row => row._rowIndex).map(row => {
+      const payload = { _rowIndex: row._rowIndex };
+      ENRICHED_COLS.forEach(col => { if (row[col] !== undefined) payload[col] = row[col]; });
+      return fetch(CONFIG.API_URL, { method: "POST", mode: "no-cors", credentials: "omit", body: JSON.stringify(payload) });
+    });
     await Promise.all(writes);
 
     allData = data;
-    if (statusEl) {
-      statusEl.textContent =
-        `✅ Done — ${data.length} rows enriched and saved (nearest hotspot, demand, idle, feasibility updated).`;
-      statusEl.style.color = "#27ae60";
-    }
+    if (statusEl) { statusEl.textContent = `✅ Done — ${data.length} rows enriched and saved.`; statusEl.style.color = "#27ae60"; }
     renderMarkers();
     renderSheetPreview(allData);
     renderSummaryTables();
-
   } catch (err) {
-    if (statusEl) {
-      statusEl.textContent = "❌ Error: " + err.message;
-      statusEl.style.color = "#c0392b";
-    }
+    if (statusEl) { statusEl.textContent = "❌ Error: " + err.message; statusEl.style.color = "#c0392b"; }
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "🔄 Recalculate Hotspot Data";
-    }
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 Recalculate Hotspot Data"; }
   }
 }
-
 
 function getPropertyName(row) {
   return row["Name of the property"] || row["Name"] || "No Name";
 }
 
+// ── Create a DOM element for a property pin ──────────────────
+function createPropertyMarkerEl(row) {
+  const el = document.createElement("div");
+  el.style.cssText = "font-size:18px;cursor:pointer;user-select:none;line-height:1";
+  el.textContent = "📍";
+  return el;
+}
+
+// ============================================================
+// RENDER MARKERS (all properties)
+// ============================================================
 function renderMarkers() {
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
+  propertyMarkers.forEach(m => m.remove());
+  propertyMarkers = [];
   let skipped = 0;
+
   allData.forEach(row => {
     const lat = parseFloat(row.Lat), lng = parseFloat(row.Long);
     if (!isNaN(lat) && !isNaN(lng)) {
@@ -512,21 +631,28 @@ function renderMarkers() {
           row["NM Id"] = hood.hood_id;
           if (row._rowIndex) {
             fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(row) })
-              .catch(err => console.error(`❌ Auto-save failed`, err));
+              .catch(err => console.error("❌ Auto-save failed", err));
           }
         }
       }
-      const name   = getPropertyName(row);
-      const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
-        .bindPopup(`<b>${name}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
-        .on('click', () => showDetails(row));
+      const name = getPropertyName(row);
+      const el = createPropertyMarkerEl(row);
+      el.addEventListener("click", () => showDetails(row));
+
+      const popup = new maplibregl.Popup({ offset: 14 })
+        .setHTML(`<b>${escHtml(name)}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`);
+
+      const marker = new maplibregl.Marker({ element: el })
+        .setLngLat([lng, lat])
+        .setPopup(popup);
+
       if (layerVisible.properties) marker.addTo(map);
-      markers.push(marker);
+      propertyMarkers.push(marker);
     } else {
       skipped++;
     }
   });
-  console.log(`📍 ${markers.length} markers, ${skipped} skipped`);
+  console.log(`📍 ${propertyMarkers.length} markers, ${skipped} skipped`);
 }
 
 // ============================================================
@@ -552,12 +678,10 @@ function filterAndRender() {
   const to   = activeFilters.dateTo   ? new Date(activeFilters.dateTo   + "T23:59:59") : null;
 
   const filtered = allData.filter(row => {
-    // Standard column filters
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
     for (const key of colKeys) {
       if (activeFilters[key] && row[key] !== activeFilters[key]) return false;
     }
-    // Date range filter on Timestamp
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
@@ -569,34 +693,44 @@ function filterAndRender() {
 
   console.log(`🔽 ${filtered.length}/${allData.length} rows match filters`);
   updateHoodVisibility();
-  renderFilteredMarkers(filtered, true); // fitView=true when user explicitly filters
+  renderFilteredMarkers(filtered, true);
   filterExtraLayers();
 }
 
 function renderFilteredMarkers(data, fitView = false) {
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
-  const bounds = [];
+  propertyMarkers.forEach(m => m.remove());
+  propertyMarkers = [];
+  const bounds = new maplibregl.LngLatBounds();
+  let hasPoints = false;
+
   data.forEach(row => {
     const lat = parseFloat(row.Lat), lng = parseFloat(row.Long);
     if (!isNaN(lat) && !isNaN(lng)) {
-      const name   = getPropertyName(row);
-      const marker = L.marker([lat, lng], { icon: getCategoryIcon(row.Category) })
-        .bindPopup(`<b>${name}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`)
-        .on('click', () => showDetails(row));
+      const name = getPropertyName(row);
+      const el = createPropertyMarkerEl(row);
+      el.addEventListener("click", () => showDetails(row));
+
+      const popup = new maplibregl.Popup({ offset: 14 })
+        .setHTML(`<b>${escHtml(name)}</b><br>${row.Category || ""}<br>NM: ${row.NM || "-"}<br>MM: ${row.MM || "-"}`);
+
+      const marker = new maplibregl.Marker({ element: el })
+        .setLngLat([lng, lat])
+        .setPopup(popup);
+
       if (layerVisible.properties) marker.addTo(map);
-      markers.push(marker);
-      bounds.push([lat, lng]);
+      propertyMarkers.push(marker);
+      bounds.extend([lng, lat]);
+      hasPoints = true;
     }
   });
-  // Only zoom/pan to fit when user explicitly requests it (fitView flag)
-  // Never on background reloads — preserves the user's current map position
-  if (fitView && bounds.length) map.fitBounds(bounds);
+
+  if (fitView && hasPoints) {
+    map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+  }
 }
 
 function clearFilters() {
   activeFilters = {};
-  // Scope to map filter bar selects only — don't touch sheet filter selects
   document.querySelectorAll(".map-filter-bar select").forEach(s => s.value = "");
   const fd = document.getElementById("filterDateFrom");
   const td = document.getElementById("filterDateTo");
@@ -629,7 +763,7 @@ function populateFilters() {
 }
 
 // ============================================================
-// ADD POINT BY CLICKING MAP
+// ADD POINT MODE
 // ============================================================
 const ADD_POINT_FIELDS = [
   { key: "Name of the property",                  label: "Property Name",         type: "text" },
@@ -653,20 +787,23 @@ function toggleAddPointMode() {
   if (addPointMode) {
     btn.textContent = "❌ Cancel Add Point";
     btn.style.background = "#c0392b";
-    map.getContainer().style.cursor = "crosshair";
+    map.getContainer().classList.add("map-crosshair");
   } else {
     btn.textContent = "➕ Add Point";
     btn.style.background = "";
-    map.getContainer().style.cursor = "";
-    if (addPointMarker) { map.removeLayer(addPointMarker); addPointMarker = null; }
+    map.getContainer().classList.remove("map-crosshair");
+    if (addPointMarker) { addPointMarker.remove(); addPointMarker = null; }
   }
 }
 
 function openAddPointModal(lat, lng) {
-  if (addPointMarker) map.removeLayer(addPointMarker);
-  addPointMarker = L.marker([lat, lng], {
-    icon: L.divIcon({ className: "custom-icon", html: `<div style="font-size:24px">📌</div>` })
-  }).addTo(map);
+  if (addPointMarker) addPointMarker.remove();
+  const el = document.createElement("div");
+  el.style.cssText = "font-size:24px;cursor:pointer";
+  el.textContent = "📌";
+  addPointMarker = new maplibregl.Marker({ element: el })
+    .setLngLat([lng, lat])
+    .addTo(map);
 
   const container = document.getElementById("addPointFields");
   if (!container) return;
@@ -692,17 +829,14 @@ function openAddPointModal(lat, lng) {
 
 function closeAddPointModal() {
   document.getElementById("addPointModal").style.display = "none";
-  if (addPointMarker) { map.removeLayer(addPointMarker); addPointMarker = null; }
+  if (addPointMarker) { addPointMarker.remove(); addPointMarker = null; }
   if (addPointMode) toggleAddPointMode();
 }
 
 async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
-  const newRow = {
-    "Lat":  parseFloat(lat),
-    "Long": parseFloat(lng)
-  };
+  const newRow = { "Lat": parseFloat(lat), "Long": parseFloat(lng) };
 
   ADD_POINT_FIELDS.forEach(f => {
     const el = document.getElementById("ap_" + f.key.replace(/[\s.()/]/g,'_'));
@@ -734,7 +868,7 @@ async function submitAddPoint() {
 }
 
 // ============================================================
-// DOWNLOAD KML / CSV (WKT)
+// DOWNLOAD KML / CSV
 // ============================================================
 function getFilteredData() {
   const hasFilter = Object.values(activeFilters).some(v => v);
@@ -792,12 +926,12 @@ function escXml(str) {
 function hoodsToKml(hoodList, layerName, color = "7f0000ff") {
   const placemarks = hoodList.map(h => `
   <Placemark>
-    <name>${escXml(h.nano_market || h.micro_market || h.hood_id)}</name>
+    <n>${escXml(h.nano_market || h.micro_market || h.hood_id)}</n>
     <description><![CDATA[NM: ${h.nano_market || ""}<br>MM: ${h.micro_market || ""}<br>ID: ${h.hood_id || ""}]]></description>
     <Style><PolyStyle><color>${color}</color><outline>1</outline></PolyStyle></Style>
     ${geometryToKmlGeometry(h.geometry)}
   </Placemark>`).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${escXml(layerName)}</name>\n${placemarks}\n</Document></kml>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${placemarks}\n</Document></kml>`;
 }
 
 function pointsToKml(data, layerName) {
@@ -805,11 +939,11 @@ function pointsToKml(data, layerName) {
     .filter(row => !isNaN(parseFloat(row.Lat)) && !isNaN(parseFloat(row.Long)))
     .map(row => `
   <Placemark>
-    <name>${escXml(getPropertyName(row))}</name>
+    <n>${escXml(getPropertyName(row))}</n>
     <description><![CDATA[Category: ${row.Category || ""}<br>NM: ${row.NM || ""}<br>MM: ${row.MM || ""}<br>Road: ${row.Road || ""}<br>Status: ${row["Final Status"] || ""}]]></description>
     <Point><coordinates>${parseFloat(row.Long)},${parseFloat(row.Lat)},0</coordinates></Point>
   </Placemark>`).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${escXml(layerName)}</name>\n${placemarks}\n</Document></kml>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${placemarks}\n</Document></kml>`;
 }
 
 function geometryToWkt(geometry) {
@@ -862,65 +996,17 @@ function downloadBlob(content, filename, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-// function downloadLayerKML(type) {
-//   const filteredData = getFilteredData();
-//   const label = activeFilters.NM || activeFilters.MM || "filtered";
-//   if (type === "nm") {
-//     const hoodList = hoodsByNM(getFilteredNMs());
-//     if (!hoodList.length) { alert("No NM hoods found."); return; }
-//     downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
-//   } else if (type === "mm") {
-//     const seen = new Set();
-//     const hoodList = hoods.filter(h => {
-//       if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
-//       seen.add(h.micro_market); return true;
-//     });
-//     if (!hoodList.length) { alert("No MM hoods found."); return; }
-//     downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
-//   } else if (type === "points") {
-//     if (!filteredData.length) { alert("No data points."); return; }
-//     downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
-//   }
-// }
-
-// function downloadLayerCSV(type) {
-//   const filteredData = getFilteredData();
-//   const label = activeFilters.NM || activeFilters.MM || "filtered";
-//   if (type === "nm") {
-//     const hoodList = hoodsByNM(getFilteredNMs());
-//     if (!hoodList.length) { alert("No NM hoods found."); return; }
-//     downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
-//   } else if (type === "mm") {
-//     const seen = new Set();
-//     const hoodList = hoods.filter(h => {
-//       if (!getFilteredMMs().includes(h.micro_market) || seen.has(h.micro_market)) return false;
-//       seen.add(h.micro_market); return true;
-//     });
-//     if (!hoodList.length) { alert("No MM hoods found."); return; }
-//     downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
-//   } else if (type === "points") {
-//     if (!filteredData.length) { alert("No data points."); return; }
-//     downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
-//   }
-// }
-
 function downloadLayerKML(type) {
   const filteredData = getFilteredData();
   const label = activeFilters.NM || activeFilters.MM || "filtered";
-
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
     if (!hoodList.length) { alert("No NM hoods found."); return; }
     downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
-
   } else if (type === "mm") {
-    // ── FIX: include ALL hoods whose micro_market is in the filtered MM list.
-    // The old code used a `seen` Set that discarded every hood after the first
-    // per MM name, losing all but one polygon per micro-market.
     const hoodList = hoodsByMM(getFilteredMMs());
     if (!hoodList.length) { alert("No MM hoods found."); return; }
     downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
-
   } else if (type === "points") {
     if (!filteredData.length) { alert("No data points."); return; }
     downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
@@ -930,25 +1016,20 @@ function downloadLayerKML(type) {
 function downloadLayerCSV(type) {
   const filteredData = getFilteredData();
   const label = activeFilters.NM || activeFilters.MM || "filtered";
-
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
     if (!hoodList.length) { alert("No NM hoods found."); return; }
     downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
-
   } else if (type === "mm") {
-    // ── FIX: same as KML — use hoodsByMM() directly, no deduplication.
     const hoodList = hoodsByMM(getFilteredMMs());
     if (!hoodList.length) { alert("No MM hoods found."); return; }
     downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
-
   } else if (type === "points") {
     if (!filteredData.length) { alert("No data points."); return; }
     downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
   }
 }
 
-// ── Extra layer downloads ────────────────────────────────────
 function extraLayerToCsvWkt(rows, latKey, lngKey, extraCols) {
   const headers = ["WKT", "nm", "mm", ...extraCols];
   const csvRows = rows
@@ -979,25 +1060,21 @@ function extraLayerToKml(rows, latKey, lngKey, layerName, popupFn) {
 
 function downloadExtraLayer(layerType, format) {
   const label = activeFilters.NM || activeFilters.MM || "all";
-
   if (layerType === "hotspots") {
     const data = getFilteredHotspots();
     if (!data.length) { alert("No hotspot data for current filter."); return; }
     if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["name", "hood", "cluster"]), `hotspots_${label}.csv`, "text/csv");
     else downloadBlob(extraLayerToKml(data, "lat", "lng", `Hotspots — ${label}`, r => `Hood: ${r.hood || "-"}<br>Cluster: ${r.cluster || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `hotspots_${label}.kml`, "application/vnd.google-earth.kml+xml");
-
   } else if (layerType === "demand") {
     const data = getFilteredDemand();
     if (!data.length) { alert("No demand data for current filter."); return; }
     if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["cluster", "orders"]), `demand_${label}.csv`, "text/csv");
     else downloadBlob(extraLayerToKml(data, "lat", "lng", `Demand — ${label}`, r => `Cluster: ${r.cluster || "-"}<br>Orders: ${r.orders || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `demand_${label}.kml`, "application/vnd.google-earth.kml+xml");
-
   } else if (layerType === "idle") {
     const data = getFilteredIdle();
     if (!data.length) { alert("No idle data for current filter."); return; }
     if (format === "csv") downloadBlob(extraLayerToCsvWkt(data, "lat", "lng", ["cluster", "hood", "idle_min", "w", "hood_pings"]), `idle_${label}.csv`, "text/csv");
     else downloadBlob(extraLayerToKml(data, "lat", "lng", `Idle — ${label}`, r => `Cluster: ${r.cluster || "-"}<br>Hood: ${r.hood || "-"}<br>Idle min: ${r.idle_min || "-"}<br>NM: ${r._nm || "-"}<br>MM: ${r._mm || "-"}`), `idle_${label}.kml`, "application/vnd.google-earth.kml+xml");
-
   } else if (layerType === "centroids") {
     const data = getFilteredCentroids();
     if (!data.length) { alert("No centroid data for current filter."); return; }
@@ -1014,38 +1091,25 @@ const LOCATION_COL = "Location (Google Maps URL) / Map Code";
 async function resolveCoords(input) {
   if (!input || !input.toString().trim()) throw new Error("Empty input");
   const raw = input.toString().trim();
-  console.log(`🔍 resolveCoords() — raw input: "${raw}"`);
-
   const directMatch = raw.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (directMatch) {
-    return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
-  }
-
+  if (directMatch) return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
   const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(raw);
   const res  = await fetch(backendUrl);
   if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
-
   const text = await res.text();
   const json = JSON.parse(text);
-
   if (json.error) throw new Error(`Backend error: ${json.error}`);
-  if (json.lat != null && json.lng != null) {
-    return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
-  }
-
+  if (json.lat != null && json.lng != null) return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
   const expandedUrl = json.url || "";
   const d3Match = expandedUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
   if (d3Match) return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
   const atMatch = expandedUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
   if (atMatch) return { lat: parseFloat(atMatch[1]), lng: parseFloat(atMatch[2]) };
-
   throw new Error(`Could not extract coords from: "${expandedUrl || raw}"`);
 }
 
 async function fillLatLong() {
   let updated = [], skippedCount = 0, failedCount = 0;
-  console.log(`🌍 fillLatLong() — starting, total rows: ${allData.length}`);
-
   for (let row of allData) {
     const locationInput = row[LOCATION_COL];
     if (!locationInput || !locationInput.toString().trim()) { skippedCount++; continue; }
@@ -1061,20 +1125,9 @@ async function fillLatLong() {
       console.error(`❌ _rowIndex:${row._rowIndex} — failed for "${locationInput}": ${e.message}`);
     }
   }
-
-  console.log(`🌍 fillLatLong() — done. Updated: ${updated.length}, Skipped: ${skippedCount}, Failed: ${failedCount}`);
-  // updated.forEach(r => fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(r) }));
   updated.forEach(r => {
-  const payload = {
-    _rowIndex: r._rowIndex,
-    Lat: r.Lat,
-    Long: r.Long
-  };
-
-  fetch(CONFIG.API_URL, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    const payload = { _rowIndex: r._rowIndex, Lat: r.Lat, Long: r.Long };
+    fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(payload) });
   });
   alert(`✅ Updated ${updated.length} rows\n⏭️ Skipped: ${skippedCount}\n❌ Failed: ${failedCount}`);
   if (updated.length > 0) loadData();
@@ -1099,71 +1152,10 @@ function fixMissingNM() {
     }
   });
   updated.forEach(r => {
-    const payload = {
-      _rowIndex: r._rowIndex,
-      NM:        r.NM,
-      MM:        r.MM,
-      "NM Id":   r["NM Id"]
-    };
+    const payload = { _rowIndex: r._rowIndex, NM: r.NM, MM: r.MM, "NM Id": r["NM Id"] };
     fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(payload) });
   });
   alert(`✅ Updated ${updated.length} rows`);
-}
-
-// ============================================================
-// HOOD UTILITIES
-// ============================================================
-function drawHoods() {
-  hoodLayers = [];
-  hoods.forEach(h => {
-    if (!h.geometry) return;
-    const layer = L.geoJSON(h.geometry, {
-      style: { color: "blue", weight: 1, fillColor: "#4da6ff", fillOpacity: 0.15 }
-    }).addTo(map);
-    layer.on("click", () => {
-      layer.setStyle({ fillColor: "orange", fillOpacity: 0.4 });
-      showHoodDetails(h);
-    });
-    hoodLayers.push({ layer, nm: h.nano_market, mm: h.micro_market });
-  });
-}
-
-function updateHoodVisibility() {
-  const filterNM = activeFilters.NM || "";
-  const filterMM = activeFilters.MM || "";
-  const noFilter = !filterNM && !filterMM;
-  hoodLayers.forEach(({ layer, nm, mm }) => {
-    const visible = layerVisible.hoods && (noFilter || ((!filterNM || nm === filterNM) && (!filterMM || mm === filterMM)));
-    visible ? (map.hasLayer(layer) || map.addLayer(layer)) : (map.hasLayer(layer) && map.removeLayer(layer));
-    if (visible) layer.setStyle({ color: "blue", weight: 1, fillColor: "#4da6ff", fillOpacity: 0.15 });
-  });
-}
-
-function assignHood(coords) {
-  const pt = turf.point([coords.lng, coords.lat]);
-  let nearest = null, minDist = Infinity;
-  for (let h of hoods) {
-    const polygon = { type: "Feature", geometry: h.geometry };
-    try {
-      if (turf.booleanPointInPolygon(pt, polygon)) return h;
-      const dist = turf.distance(pt, turf.centroid(polygon));
-      if (dist < minDist) { minDist = dist; nearest = h; }
-    } catch (e) {}
-  }
-  return nearest;
-}
-
-function isEmpty(val) { return !val || val.toString().trim() === "" || val === "NA"; }
-
-function escHtml(str) {
-  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
-function getCategoryIcon(category) {
-  return L.divIcon({
-    className: "custom-icon",
-    html: `<div style="font-size:18px">📍</div>`
-  });
 }
 
 // ============================================================
@@ -1179,35 +1171,13 @@ function showHoodDetails(h) {
 }
 
 const DETAIL_DROPDOWNS = {
-  "Property": [
-    "Private", "Public"
-  ],
-  "App status": [
-    "Active", "Inactive"
-  ],
-  "Lead Status": [
-    "2. Owner conversation pending",
-    "3. Owner's confirmation pending",
-    "4. Confirmed",
-    "5. Follow up required",
-    "6. Dropped"
-  ],
-  "Final Status": [
-    "Dropped off", "Active", "Cold", "Deal closed",
-    "Deal closed - sign pending", "No deal required",
-    "To be reactivated", "Deal - closed - Chairs pending",
-    "Dropped off after launch"
-  ],
-  "Closure type": [
-    "Resting + Washroom", "Resting", "NA"
-  ],
-  "Set up": [
-    "Chairs to be set", "Owner will setup chairs", "Chairs available", "NA"
-  ],
-  "Category": [
-    "Ladies PG", "Shop", "Restaurant", "Apartment", "Gated community", "Independent Builder floor",
-    "Bus Stop", "Park", "Petrol Pump", "Public Washroom", "Other"
-  ]
+  "Property": ["Private", "Public"],
+  "App status": ["Active", "Inactive"],
+  "Lead Status": ["2. Owner conversation pending","3. Owner's confirmation pending","4. Confirmed","5. Follow up required","6. Dropped"],
+  "Final Status": ["Dropped off", "Active", "Cold", "Deal closed","Deal closed - sign pending", "No deal required","To be reactivated", "Deal - closed - Chairs pending","Dropped off after launch"],
+  "Closure type": ["Resting + Washroom", "Resting", "NA"],
+  "Set up": ["Chairs to be set", "Owner will setup chairs", "Chairs available", "NA"],
+  "Category": ["Ladies PG", "Shop", "Restaurant", "Apartment", "Gated community", "Independent Builder floor","Bus Stop", "Park", "Petrol Pump", "Public Washroom", "Other"]
 };
 
 function showDetails(row) {
@@ -1229,15 +1199,12 @@ function showDetails(row) {
       table.innerHTML += `
         <tr>
           <td>${escHtml(key)}</td>
-          <td>
-            <select class="detail-select" data-key="${escHtml(key)}">
-              <option value="">-- select --</option>
-              ${extraOption}${options}
-            </select>
-          </td>
+          <td><select class="detail-select" data-key="${escHtml(key)}">
+            <option value="">-- select --</option>
+            ${extraOption}${options}
+          </select></td>
         </tr>`;
     } else if (key === "Timestamp") {
-      // Timestamp is the original Google Form submission time — never editable
       const displayVal = formatTsDisplay(val) || escHtml(String(val));
       table.innerHTML += `
         <tr>
@@ -1263,13 +1230,8 @@ function showDetails(row) {
     </tr>`;
 }
 
-// Returns timestamp string in "M/D/YYYY HH:MM:SS" format, always in IST (UTC+5:30).
-// Uses explicit offset arithmetic so it works correctly regardless of the browser's
-// local timezone — prevents UTC timestamps appearing when the user's system is UTC.
 function formatTimestamp(date) {
-  // Shift to IST wall-clock time
   const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
-  // Use UTC getters on the shifted date to read IST values
   return `${ist.getUTCMonth()+1}/${ist.getUTCDate()}/${ist.getUTCFullYear()} ` +
     `${String(ist.getUTCHours()).padStart(2,'0')}:${String(ist.getUTCMinutes()).padStart(2,'0')}:${String(ist.getUTCSeconds()).padStart(2,'0')}`;
 }
@@ -1277,10 +1239,9 @@ function formatTimestamp(date) {
 function saveCurrent() {
   if (!currentRow) return;
 
-  // ── Snapshot old App status BEFORE overwriting with new values ───────────
-  const prevAppStatus = String(currentRow["App status"] || "").trim();
+  const prevAppStatus   = String(currentRow["App status"]   || "").trim();
   const prevFinalStatus = String(currentRow["Final Status"] || "").trim();
-  // ── Read all editable cells into currentRow ──────────────────────────────
+
   document.querySelectorAll("[contenteditable]").forEach(cell => {
     const key = cell.dataset.key;
     if (key) currentRow[key] = cell.innerText.trim();
@@ -1291,122 +1252,72 @@ function saveCurrent() {
     if (key) currentRow[key] = sel.value;
   });
 
-  if (!currentRow._rowIndex) { alert("\u274c Cannot save \u2014 row index missing, try refreshing"); return; }
+  if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing, try refreshing"); return; }
 
   const nowIST = formatTimestamp(new Date());
 
-  // // ── Rule 1: Signage date ─────────────────────────────────────────────────
-  // // Fill ONLY when: Signage date is currently empty AND Lead Status is a deal-closed state
-  // const SIGNAGE_STATUSES = ["Deal closed", "Deal - closed - Chairs pending"];
-  // const leadStatus   = String(currentRow["Lead Status"] || "").trim();
-  // const signageEmpty = !currentRow["Signage date"] || String(currentRow["Signage date"]).trim() === "";
-  // if (signageEmpty && SIGNAGE_STATUSES.includes(leadStatus)) {
-  //   currentRow["Signage date"] = nowIST;
-  //   console.log("\ud83d\udcc5 Signage date auto-filled:", nowIST, "(Lead Status:", leadStatus + ")");
-  // }
-
-  // ── Rule 1: Launch date ──────────────────────────────────────────────────
-  // Fill when App status is being changed TO "Active" (was not "Active" before)
   const newAppStatus = String(currentRow["App status"] || "").trim();
   if (newAppStatus === "Active" && prevAppStatus !== "Active") {
     currentRow["Launch date"] = nowIST;
-    console.log("\ud83d\ude80 Launch date auto-filled:", nowIST, "(App status changed to Active)");
+    console.log("🚀 Launch date auto-filled:", nowIST);
   }
 
-  // ── Rule 2: Signage date ──────────────────────────────────────────────────
-  // Fill when Final Status changes to any "closed" state
-
-  const CLOSED_STATUSES = [
-    "Deal closed",
-    "Deal - closed - Chairs pending"
-  ];
-
+  const CLOSED_STATUSES = ["Deal closed", "Deal - closed - Chairs pending"];
   const newFinalStatus = String(currentRow["Final Status"] || "").trim();
-
-  if (
-    CLOSED_STATUSES.includes(newFinalStatus) &&
-    !CLOSED_STATUSES.includes(prevFinalStatus)
-  ) {
+  if (CLOSED_STATUSES.includes(newFinalStatus) && !CLOSED_STATUSES.includes(prevFinalStatus)) {
     currentRow["Signage date"] = nowIST;
-    console.log("📅 Signage date auto-filled:", nowIST, "(Final Status changed to closed state)");
+    console.log("📅 Signage date auto-filled:", nowIST);
   }
 
-  // ── Timestamp column is NEVER written back ───────────────────────────────
-  // It reflects the original Google Form submission time.
-  // Build a clean payload that explicitly excludes Timestamp.
   const savePayload = Object.assign({}, currentRow);
   delete savePayload["Timestamp"];
 
   fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(savePayload) })
-    .then(() => {
-      alert("\u2705 Saved");
-      showDetails(currentRow);
-    })
-    .catch(err => alert("\u274c Save failed: " + err.message));
+    .then(() => { alert("✅ Saved"); showDetails(currentRow); })
+    .catch(err => alert("❌ Save failed: " + err.message));
 }
 
 // ============================================================
-// TIMESTAMP PARSING — Sheet stores IST directly as M/D/YYYY H:MM:SS
-// No UTC shifting needed. Parse as local time only.
+// TIMESTAMP UTILITIES
 // ============================================================
 function parseTimestamp(val) {
   if (!val || val === "") return null;
-
-  // Already a Date object
   if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
-
-  // Google Sheets serial number (days since 1899-12-30)
-  // Rare — only if cell is formatted as Number instead of Date/Text
   if (typeof val === "number") {
     const d = new Date((val - 25569) * 86400000);
     return isNaN(d.getTime()) ? null : d;
   }
-
   const str = val.toString().trim();
-
-  // ── ISO 8601 / UTC strings ──
-  // e.g. "2026-04-14T12:26:08.000Z" — treat as UTC, display in IST
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
     const d = new Date(str);
     return isNaN(d.getTime()) ? null : d;
   }
-
-  // ── PRIMARY FORMAT ──
-  // "M/D/YYYY H:MM:SS" written by formatTimestamp() — always IST, parse as local
   const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
   if (slashMatch) {
     const [, m, d, y, hr, min, sec] = slashMatch;
     return new Date(+y, +m - 1, +d, +hr, +min, +sec);
   }
-
-  // ── FALLBACK ──
-  // Plain date string without time e.g. "2026-04-09"
   const fallback = new Date(str);
   return isNaN(fallback.getTime()) ? null : fallback;
 }
 
-// Format a timestamp value for display — always shows IST time
 function formatTsDisplay(val) {
   if (!val || val === "") return "";
   const d = parseTimestamp(val);
-  if (!d) return String(val); // unparseable — show raw
-
-  // For the primary M/D/YYYY format (already IST), use local getters directly
+  if (!d) return String(val);
   const str = val.toString().trim();
   const isSlashFormat = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/.test(str);
   if (isSlashFormat) {
     return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ` +
       `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
   }
-
-  // For ISO/UTC strings, shift to IST (UTC+5:30) before displaying
   const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
   return `${ist.getUTCDate()}/${ist.getUTCMonth()+1}/${ist.getUTCFullYear()} ` +
     `${String(ist.getUTCHours()).padStart(2,'0')}:${String(ist.getUTCMinutes()).padStart(2,'0')}:${String(ist.getUTCSeconds()).padStart(2,'0')}`;
 }
 
 // ============================================================
-// SHEET PREVIEW — independent filters + totals row
+// SHEET PREVIEW
 // ============================================================
 function getSheetFilters() {
   return {
@@ -1427,7 +1338,7 @@ function getSheetFilters() {
 }
 
 function getSheetFilteredData() {
-  const sf   = getSheetFilters();
+  const sf = getSheetFilters();
   const from        = sf.dateFrom    ? new Date(sf.dateFrom    + "T00:00:00") : null;
   const to          = sf.dateTo      ? new Date(sf.dateTo      + "T23:59:59") : null;
   const signageFrom = sf.signageFrom ? new Date(sf.signageFrom + "T00:00:00") : null;
@@ -1440,21 +1351,18 @@ function getSheetFilteredData() {
     for (const key of colKeys) {
       if (sf[key] && row[key] !== sf[key]) return false;
     }
-    // Timestamp range
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
       if (from && ts < from) return false;
       if (to   && ts > to)   return false;
     }
-    // Signage date range
     if (signageFrom || signateTo) {
       const ts = parseTimestamp(row["Signage date"]);
       if (!ts) return false;
       if (signageFrom && ts < signageFrom) return false;
       if (signateTo   && ts > signateTo)   return false;
     }
-    // Launch date range
     if (launchFrom || launchTo) {
       const ts = parseTimestamp(row["Launch date"]);
       if (!ts) return false;
@@ -1465,23 +1373,18 @@ function getSheetFilteredData() {
   });
 }
 
-function applySheetFilters() {
-  renderSheetPreview(getSheetFilteredData());
-}
+function applySheetFilters() { renderSheetPreview(getSheetFilteredData()); }
 
 function clearSheetFilters() {
   ["sfCategory","sfProperty","sfAppStatus","sfLeadStatus","sfFinalStatus","sfNM","sfMM"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
+    const el = document.getElementById(id); if (el) el.value = "";
   });
   ["sfDateFrom","sfDateTo","sfSignageFrom","sfSignageTo","sfLaunchFrom","sfLaunchTo"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
+    const el = document.getElementById(id); if (el) el.value = "";
   });
   renderSheetPreview(allData);
 }
 
-// Backward-compat aliases
 function applyDateFilter() { applySheetFilters(); }
 function clearDateFilter()  { clearSheetFilters(); }
 
@@ -1520,15 +1423,14 @@ function renderSheetPreview(data) {
   }
   if (countEl) countEl.textContent = `${data.length} rows`;
 
-  // Columns shown in the sheet preview table (in display order)
   const previewCols = [
     "MM", "NM", "NM Id", "Name of the property", "App status", "Category",
     "Closure type", "Lat", "Long", "Location (Google Maps URL) / Map Code",
     "Owner Contact Name", "Owner Contact Number",
     "Contact Name", "Contact number",
-    "Property", "Signage date", "Launch date", 
-    "Photo 1 (Image Upload) (From Road)",	
-    "Photo 2 (Image Upload) (Sitting Area)",	
+    "Property", "Signage date", "Launch date",
+    "Photo 1 (Image Upload) (From Road)",
+    "Photo 2 (Image Upload) (Sitting Area)",
     "Photo 3 (Image Upload)", "Agreement Photo (Image Upload)",
     "Lead Status", "Final Status"
   ];
@@ -1594,7 +1496,6 @@ function getSummaryFilteredData() {
   const sf   = getSummaryFilters();
   const from = sf.dateFrom ? new Date(sf.dateFrom + "T00:00:00") : null;
   const to   = sf.dateTo   ? new Date(sf.dateTo   + "T23:59:59") : null;
-
   return allData.filter(row => {
     if (sf.NM && row.NM !== sf.NM) return false;
     if (sf.MM && row.MM !== sf.MM) return false;
@@ -1624,8 +1525,7 @@ function applySummaryFilters() { renderSummaryTables(); }
 
 function clearSummaryFilters() {
   ["stNM","stMM","stDateFrom","stDateTo"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
+    const el = document.getElementById(id); if (el) el.value = "";
   });
   renderSummaryTables();
 }
@@ -1652,10 +1552,6 @@ function renderSummaryTables() {
     "Total in funnel", "To be reactivated", "Cold", "Dropped off",
     "Deal closed - sign pending", "Places Finalised",
     "Deal - closed - Chairs pending", "Deal closed", "No deal required"
-  ];
-
-  const FIXED_COMMERCIAL_BUCKETS = [
-    "2000", "2500", "3000", "3500", "4000", "others", "NA"
   ];
 
   const allCats     = FIXED_CATEGORIES;
@@ -1698,23 +1594,21 @@ function renderSummaryTables() {
       const totalRows = data.length;
       const pct = (num, denom) => !denom ? "0 (0%)" : `${num} (${(num / denom * 100).toFixed(1)}%)`;
       const cats = countByCat(finalisedRows);
-      return `<tr>
-        <td>${escHtml(status)}</td>
-        <td><b>${pct(finalisedRows.length, totalRows)}</b></td>
-        ${allCats.map(c => {
-          const catTotal = data.filter(r => normalizeCategory(r.Category) === c).length;
-          return `<td>${pct(cats[c], catTotal)}</td>`;
-        }).join("")}
+      return `<tr class="summary-finalised-row">
+        <td>Places Finalised</td>
+        <td>${pct(finalisedRows.length, totalRows)}</td>
+        ${allCats.map(c => `<td>${pct(cats[c] || 0, data.filter(r => normalizeCategory(r.Category) === c).length)}</td>`).join("")}
       </tr>`;
     } else {
       rows = data.filter(r => r["Final Status"] === status);
     }
 
     const cats = countByCat(rows);
+    const total = rows.length;
     return `<tr>
       <td>${escHtml(status)}</td>
-      <td><b>${rows.length}</b></td>
-      ${allCats.map(c => `<td>${cats[c]}</td>`).join("")}
+      <td>${total}</td>
+      ${allCats.map(c => `<td>${cats[c] || 0}</td>`).join("")}
     </tr>`;
   }).join("");
 
@@ -1722,7 +1616,7 @@ function renderSummaryTables() {
     <div class="summary-block">
       <div class="summary-block-header">
         <h4 class="summary-block-title">Final Status × Category</h4>
-        <button class="summary-dl-btn" onclick="downloadSummaryTable('stMainTable','final_status_x_category')">⬇ CSV</button>
+        <button class="summary-dl-btn" onclick="downloadSummaryTable('stMainTable','status_x_category')">⬇ CSV</button>
       </div>
       <div class="summary-table-wrapper">
         <table class="summary-table" id="stMainTable">
@@ -1732,27 +1626,28 @@ function renderSummaryTables() {
       </div>
     </div>`;
 
-  const closureTypes    = ["Resting + Washroom", "Resting"];
-  const commercialRows  = closureTypes.map(closureType => {
-    const closureRows = data.filter(r => r["Closure type"] === closureType);
+  // Commercials breakdown
+  const FIXED_COMMERCIAL_BUCKETS = ["2000", "2500", "3000", "3500", "4000", "others", "NA"];
+  const allCommercials = FIXED_COMMERCIAL_BUCKETS;
 
+  const headerCols2 = `<th>Closure Type / Value</th><th>Total</th>${
+    allCats.map(c => `<th>${escHtml(c)}</th>`).join("")
+  }`;
+
+  const closureTypes = [...new Set(data.map(r => r["Closure type"] || "NA").filter(Boolean))].sort();
+  const commercialRows = closureTypes.map(closureType => {
+    const closureRows = data.filter(r => (r["Closure type"] || "NA") === closureType);
     const headerRow = `<tr class="summary-closure-header">
-      <td colspan="${2 + allCats.length}">
-        <b>${escHtml(closureType)}</b>
-        <span style="color:#888;margin-left:8px">(${closureRows.length} total)</span>
-      </td>
+      <td colspan="${allCats.length + 2}"><b>${escHtml(closureType)}</b></td>
     </tr>`;
 
-    const valueRows = FIXED_COMMERCIAL_BUCKETS.map(val => {
-      const valRows = closureRows.filter(r => {
-        const raw = r["Closure commercial (Ex. 2000, 4000 etc)"] || r["Closure commercial"];
-        return normalizeCommercial(raw) === val;
-      });
-      const cats = countByCat(valRows);
+    const valueRows = allCommercials.map(bucket => {
+      const bucketRows = closureRows.filter(r => normalizeCommercial(r["Commercials"]) === bucket);
+      const cats = countByCat(bucketRows);
       return `<tr>
-        <td style="padding-left:16px">${val}</td>
-        <td>${valRows.length}</td>
-        ${allCats.map(c => `<td>${cats[c]}</td>`).join("")}
+        <td style="padding-left:16px">${bucket}</td>
+        <td>${bucketRows.length}</td>
+        ${allCats.map(c => `<td>${cats[c] || 0}</td>`).join("")}
       </tr>`;
     }).join("");
 
@@ -1774,9 +1669,7 @@ function renderSummaryTables() {
       </div>
       <div class="summary-table-wrapper">
         <table class="summary-table" id="stCommTable">
-          <thead>
-            <tr>${headerCols.replace("Final Status","Closure Type / Value")}</tr>
-          </thead>
+          <thead><tr>${headerCols2}</tr></thead>
           <tbody>${commercialRows}</tbody>
         </table>
       </div>
@@ -1798,11 +1691,8 @@ function downloadSummaryTable(tableId, filename) {
 function refreshData() { loadData(); loadExtraLayers(); }
 
 // ============================================================
-// MAP SEARCH
+// MAP SEARCH (Nominatim — unchanged logic, updated for MapLibre)
 // ============================================================
-let searchMarker = null;
-let searchDebounceTimer = null;
-
 function initMapSearch() {
   const input   = document.getElementById("mapSearchInput");
   const results = document.getElementById("mapSearchResults");
@@ -1842,21 +1732,28 @@ async function searchLocation(query) {
 }
 
 function selectSearchResult(lat, lng, name) {
-  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-  const latlng = [parseFloat(lat), parseFloat(lng)];
-  searchMarker = L.marker(latlng, {
-    icon: L.divIcon({ className: "custom-icon", html: `<div style="font-size:28px">📌</div>` })
-  }).addTo(map).bindPopup(`<b>${name}</b><br><small>${lat}, ${lng}</small>`).openPopup();
-  map.setView(latlng, 16);
+  if (searchMarker) { searchMarker.remove(); searchMarker = null; }
+  const el = document.createElement("div");
+  el.style.cssText = "font-size:28px;cursor:pointer;animation:pulse 1.5s ease infinite";
+  el.textContent = "📌";
+
+  const popup = new maplibregl.Popup({ offset: 14 })
+    .setHTML(`<b>${escHtml(name)}</b><br><small>${lat}, ${lng}</small>`);
+
+  searchMarker = new maplibregl.Marker({ element: el })
+    .setLngLat([parseFloat(lng), parseFloat(lat)])
+    .setPopup(popup)
+    .addTo(map);
+
+  searchMarker.togglePopup();
+  map.flyTo({ center: [parseFloat(lng), parseFloat(lat)], zoom: 16 });
   document.getElementById("mapSearchInput").value = name;
   document.getElementById("mapSearchResults").classList.remove("open");
 }
 
-
 // ============================================================
 // INCENTIVE TRACKER
 // ============================================================
-
 function getIncentiveFilters() {
   return {
     dateFrom:   document.getElementById("incDateFrom")?.value   || "",
@@ -1866,10 +1763,6 @@ function getIncentiveFilters() {
   };
 }
 
-// Incentive formula — Private only, based on number of launches
-// Milestone payouts: 1=100, 2=200, 3=400, 4=600, 5=800, 6=1000 (cumulative)
-// Each step beyond 6 continues the +200 pattern
-// Washroom Bonus: +100 per property that has a washroom (closure type contains "Washroom")
 const LAUNCH_MILESTONES = [0, 100, 200, 400, 600, 800, 1000];
 
 function calcPrivateIncentive(n, washroomCount) {
@@ -1878,7 +1771,6 @@ function calcPrivateIncentive(n, washroomCount) {
   if (n < LAUNCH_MILESTONES.length) {
     base = LAUNCH_MILESTONES[n];
   } else {
-    // Beyond 6 launches, continue +200 pattern from 1000
     base = 1000 + (n - 6) * 200;
   }
   const washroomBonus = (washroomCount || 0) * 100;
@@ -1893,7 +1785,6 @@ function renderIncentiveTables() {
   const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
   const to   = dateTo   ? new Date(dateTo   + "T23:59:59") : null;
 
-  // ── Base dataset — apply proximity filter first ──────────────
   let base = allData;
   if (proximity === "250") {
     base = allData.filter(r => {
@@ -1902,102 +1793,57 @@ function renderIncentiveTables() {
     });
   }
 
-  // ── Apply duplicate filter to base dataset ───────────────────
   if (duplicates === "exclude") {
     base = base.filter(r => (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate");
   } else if (duplicates === "only") {
     base = base.filter(r => (r["Duplicate"] || "").trim().toLowerCase() === "duplicate");
   }
 
-  // ── Helper: is a date value within the selected range ────────
-  function inRange(val) {
-    const d = parseTimestamp(val);
-    if (!d) return false;
-    if (from && d < from) return false;
-    if (to   && d > to)   return false;
-    return true;
-  }
-
-  // ── Helper: is Timestamp within range (leads) ─────────────────
-  function leadInRange(row) {
-    const d = parseTimestamp(row["Timestamp"]);
-    if (!d) return false;
-    if (from && d < from) return false;
-    if (to   && d > to)   return false;
-    return true;
-  }
-
-  // ── Build a Sr No → property name map from ALL data (not just filtered/ranged)
-  // Used to resolve "duplicate of Sr No X" → property name
   const srNoToName = {};
   allData.forEach(r => {
-    const sr = String(r["Sr No"] || "").trim();
-    const nm = (r["Name of the property"] || "").trim();
-    if (sr && nm && (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate") {
-      // prefer the non-duplicate (original) entry for each Sr No
-      if (!srNoToName[sr]) srNoToName[sr] = nm;
+    const srNo = String(r["Sr No"] || "").trim();
+    if (srNo && (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate") {
+      srNoToName[srNo] = (r["Name of the property"] || "").trim();
     }
-  });
-  // Fallback: if an Sr No only appears on duplicate rows, still store it
-  allData.forEach(r => {
-    const sr = String(r["Sr No"] || "").trim();
-    const nm = (r["Name of the property"] || "").trim();
-    if (sr && nm && !srNoToName[sr]) srNoToName[sr] = nm;
   });
 
-  // ── Group by email ────────────────────────────────────────────
-  // Collect unique emails + their display name ("Lead From") from base
-  const emailMeta = {};
+  const inRange = (val) => {
+    if (!val) return false;
+    const ts = parseTimestamp(val);
+    if (!ts) return false;
+    if (from && ts < from) return false;
+    if (to   && ts > to)   return false;
+    return true;
+  };
+
+  const emailGroups = {};
   base.forEach(r => {
-    const email = (r["Email Address"] || "").trim();
+    const email = (r["Email"] || r["email"] || "").trim().toLowerCase();
     if (!email) return;
-    if (!emailMeta[email]) {
-      emailMeta[email] = { name: (r["Lead From"] || "").trim() };
-    } else if (!emailMeta[email].name) {
-      emailMeta[email].name = (r["Lead From"] || "").trim();
-    }
+    if (!emailGroups[email]) emailGroups[email] = [];
+    emailGroups[email].push(r);
   });
-  const emails = Object.keys(emailMeta).sort();
 
   function buildTableData(propType) {
-    return emails.map(email => {
-      const name = emailMeta[email].name || "";
-      const rows = base.filter(r => (r["Email Address"] || "").trim() === email);
+    return Object.entries(emailGroups).map(([email, rows]) => {
+      const name = rows.find(r => r["Name"] || r["name"])?.["Name"] || rows.find(r => r["name"])?.["name"] || email;
 
-      // ── Launched ─────────────────────────────────────────────
-      const launchedRows = rows.filter(r => r["Property"] === propType && inRange(r["Launch date"]));
-      const launchCount  = launchedRows.length;
-      const launchNames  = launchedRows.map(r => {
-        const nm = r["Name of the property"] || "—";
-        const ct = (r["Closure type"] || "").toLowerCase();
-        return ct.includes("washroom") ? nm + " 🚿" : nm;
-      }).join(", ");
+      const launchRows = rows.filter(r => r["Property"] === propType && inRange(r["Launch date"]));
+      const launchCount = launchRows.length;
+      const launchNames = launchRows.map(r => r["Name of the property"] || "—").join(", ");
+      const washroomCount = launchRows.filter(r => (r["Closure type"] || "").toLowerCase().includes("washroom")).length;
 
-      // Count washroom bonus
-      const washroomCount = launchedRows.filter(r =>
-        (r["Closure type"] || "").toLowerCase().includes("washroom")
-      ).length;
-
-      // ── Leads in range ───────────────────────────────────────
-      const leadRowsInRange = rows.filter(r => leadInRange(r));
+      const leadRowsInRange = rows.filter(r => r["Property"] === propType && inRange(r["Timestamp"]));
       const leadCount = leadRowsInRange.length;
-
-      // ── Non-duplicate leads ──────────────────────────────────
-      // A lead is non-duplicate if its "Duplicate" column is NOT "Duplicate"
       const nonDupLeadCount = leadRowsInRange.filter(r =>
         (r["Duplicate"] || "").trim().toLowerCase() !== "duplicate"
       ).length;
 
-      // ── Duplicate breakdown for this person in the date range ─
-      // For each lead row in range that IS a duplicate, map:
-      //   "this property name" → "original property name (Sr No X)"
-      // We use allData (all dates) to resolve the original by Sr No
       const dupPairs = [];
       leadRowsInRange.forEach(r => {
         if ((r["Duplicate"] || "").trim().toLowerCase() !== "duplicate") return;
         const thisProp = (r["Name of the property"] || "—").trim();
         const srNo     = String(r["Sr No"] || "").trim();
-        // Find the original: same Sr No, not flagged as duplicate, in allData
         const original = allData.find(o =>
           String(o["Sr No"] || "").trim() === srNo &&
           (o["Duplicate"] || "").trim().toLowerCase() !== "duplicate" &&
@@ -2009,24 +1855,15 @@ function renderIncentiveTables() {
         dupPairs.push({ thisProp, origName, srNo });
       });
 
-      // ── Deal closed ──────────────────────────────────────────
       const dealRows  = rows.filter(r => r["Property"] === propType && inRange(r["Signage date"]));
       const dealCount = dealRows.length;
       const dealNames = dealRows.map(r => r["Name of the property"] || "—").join(", ");
 
-      // ── Incentive ────────────────────────────────────────────
       const incentive = propType === "Private"
         ? calcPrivateIncentive(launchCount, washroomCount)
         : launchCount * 20;
 
-      return {
-        email, name,
-        launchCount, launchNames,
-        washroomCount,
-        leadCount, nonDupLeadCount, dupPairs,
-        dealCount, dealNames,
-        incentive,
-      };
+      return { email, name, launchCount, launchNames, washroomCount, leadCount, nonDupLeadCount, dupPairs, dealCount, dealNames, incentive };
     }).filter(r => r.launchCount > 0 || r.leadCount > 0 || r.dealCount > 0);
   }
 
@@ -2045,7 +1882,6 @@ function renderIncentiveTables() {
       : null;
 
     const rows = tableData.map(r => {
-      // Render duplicate pairs as a compact key→value list
       const dupCell = r.dupPairs.length
         ? r.dupPairs.map(p =>
             `<span class="dup-pair">
@@ -2164,12 +2000,20 @@ function applyIncentiveFilters() { renderIncentiveTables(); }
 
 function clearIncentiveFilters() {
   ["incDateFrom", "incDateTo"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = "";
+    const el = document.getElementById(id); if (el) el.value = "";
   });
   const prox = document.getElementById("incProximity");
   if (prox) prox.value = "all";
   const dup = document.getElementById("incDuplicates");
   if (dup) dup.value = "all";
   renderIncentiveTables();
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function isEmpty(val) { return !val || val.toString().trim() === "" || val === "NA"; }
+
+function escHtml(str) {
+  return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }

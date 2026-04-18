@@ -4,295 +4,62 @@
   <title>Seva Property Dashboard</title>
 
   <link rel="stylesheet" href="style.css"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <!-- MapLibre GL JS replaces Leaflet -->
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-</head>
-
-<body>
-
-  <div class="app">
-
-    <!-- HEADER -->
-    <div class="header">
-      <h2>📍 Seva Property Map</h2>
-    </div>
-
-    <!-- ACTION BUTTONS -->
-    <div class="container">
-      <div class="actions centered">
-        <button onclick="refreshData()">⟳ Refresh</button>
-        <button onclick="saveCurrent()">💾 Save</button>
-        <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
-        <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
-        <button id="btnAddPoint" class="primary" onclick="toggleAddPointMode()">➕ Add Point</button>
-      </div>
-    </div>
-
-    <!-- FILTERS + DOWNLOAD -->
-    <div class="container">
-      <div class="filters">
-        <select id="filterCategory"><option value="">Category</option></select>
-        <select id="filterProperty"><option value="">Property</option></select>
-        <select id="filterAppStatus"><option value="">App status</option></select>
-        <select id="filterLeadStatus"><option value="">Lead Status</option></select>
-        <select id="filterFinalStatus"><option value="">Final Status</option></select>
-        <select id="filterNM"><option value="">NM</option></select>
-        <select id="filterMM"><option value="">MM</option></select>
-        <!-- Add alongside other map filter selects -->
-        <input type="date" id="filterDateFrom" onchange="applyFilters()" title="From date" />
-        <input type="date" id="filterDateTo"   onchange="applyFilters()" title="To date" />
-        <button class="primary" onclick="applyFilters()">Apply</button>
-        <button onclick="clearFilters()">Clear</button>
-      </div>
-
-      <!-- DOWNLOAD ROW -->
-      <div class="download-row">
-        <span class="download-label">⬇ Properties:</span>
-        <button class="dl-btn dl-nm"  onclick="downloadLayerKML('nm')">🗺 NM KML</button>
-        <button class="dl-btn dl-mm"  onclick="downloadLayerKML('mm')">🗺 MM KML</button>
-        <button class="dl-btn dl-pt"  onclick="downloadLayerKML('points')">📍 KML</button>
-        <button class="dl-btn dl-nm"  onclick="downloadLayerCSV('nm')">📄 NM CSV</button>
-        <button class="dl-btn dl-mm"  onclick="downloadLayerCSV('mm')">📄 MM CSV</button>
-        <button class="dl-btn dl-pt"  onclick="downloadLayerCSV('points')">📄 CSV</button>
-      </div>
-      <div class="download-row">
-        <span class="download-label">⬇ Layers (filtered):</span>
-        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','kml')">🔥 Hotspots KML</button>
-        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','csv')">🔥 Hotspots CSV</button>
-        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','kml')">📦 Demand KML</button>
-        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','csv')">📦 Demand CSV</button>
-        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','kml')">🚗 Idle KML</button>
-        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','csv')">🚗 Idle CSV</button>
-        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','kml')">📊 Centroids KML</button>
-        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','csv')">📊 Centroids CSV</button>
-      </div>
-    </div>
-
-    <!-- MAP + SEARCH + LEGEND -->
-    <div class="container">
-      <div class="map-card">
-        <!-- SEARCH BAR OVERLAID ON MAP -->
-        <div class="map-search-wrapper">
-          <input type="text" id="mapSearchInput" placeholder="🔍 Search location on map..." autocomplete="off"/>
-          <div id="mapSearchResults" class="search-results"></div>
-        </div>
-
-        <!-- LEGEND OVERLAID ON MAP -->
-        <div id="mapLegend" class="map-legend"></div>
-
-        <div id="map"></div>
-      </div>
-    </div>
-
-    <!-- DETAILS -->
-    <div class="container">
-      <div class="details-card">
-        <h3>Details</h3>
-        <table id="detailsTable"></table>
-      </div>
-    </div>
-
-    <!-- SHEET PREVIEW -->
-    <div class="container">
-      <div class="sheet-preview-card">
-        <div class="sheet-preview-header">
-          <h3>📊 Sheet Preview</h3>
-          <span id="sheetRowCount" class="row-count"></span>
-          <button class="summary-dl-btn" onclick="downloadSheetPreviewCSV()" style="margin-left:auto">⬇ CSV</button>
-        </div>
-
-        <!-- SHEET FILTERS — independent from map filters -->
-        <div class="sheet-filter-bar">
-          <select id="sfCategory"><option value="">Category</option></select>
-          <select id="sfProperty"><option value="">Property</option></select>
-          <select id="sfAppStatus"><option value="">App Status</option></select>
-          <select id="sfLeadStatus"><option value="">Lead Status</option></select>
-          <select id="sfFinalStatus"><option value="">Final Status</option></select>
-          <select id="sfNM"><option value="">NM</option></select>
-          <select id="sfMM"><option value="">MM</option></select>
-        </div>
-        <div class="sheet-filter-bar" style="margin-top:6px">
-          <span class="date-filter-label">📅 Timestamp:</span>
-          <input type="date" id="sfDateFrom" />
-          <span style="color:#888;font-size:13px">to</span>
-          <input type="date" id="sfDateTo" />
-          <span class="date-filter-label">📅 Signage Date:</span>
-          <input type="date" id="sfSignageFrom" onchange="applySheetFilters()" />
-          <input type="date" id="sfSignageTo"   onchange="applySheetFilters()" />
-          <span class="date-filter-label">📅 Launch Date:</span>
-          <input type="date" id="sfLaunchFrom"  onchange="applySheetFilters()" />
-          <input type="date" id="sfLaunchTo"    onchange="applySheetFilters()" />
-          <button class="primary" onclick="applySheetFilters()">Apply</button>
-          <button onclick="clearSheetFilters()">Clear</button>
-        </div>
-
-        <div class="sheet-table-wrapper">
-          <table id="sheetPreviewTable"></table>
-        </div>
-      </div>
-    </div>
-
-    <!-- SUMMARY CROSS-TAB TABLES -->
-    <div class="container">
-      <div class="sheet-preview-card">
-        <div class="sheet-preview-header">
-          <h3>📊 Summary Tables</h3>
-          <span style="font-size:12px;color:#888">Final Status × Category &amp; Commercials breakdown</span>
-        </div>
-
-        <!-- Independent filters for summary tables -->
-        <div class="sheet-filter-bar">
-          <select id="stNM"><option value="">NM</option></select>
-          <select id="stMM"><option value="">MM</option></select>
-          <span class="date-filter-label">📅 Timestamp:</span>
-          <input type="date" id="stDateFrom" />
-          <span style="color:#888;font-size:13px">to</span>
-          <input type="date" id="stDateTo" />
-          <button class="primary" onclick="applySummaryFilters()">Apply</button>
-          <button onclick="clearSummaryFilters()">Clear</button>
-        </div>
-
-        <div id="summaryTablesContainer" style="margin-top:12px"></div>
-      </div>
-    </div>
-<!-- ══════════════════════════════════════════════════
-     RECALCULATE HOTSPOT DATA
-     ══════════════════════════════════════════════════ -->
-<div class="container">
-  <div class="sheet-preview-card">
-    <div class="sheet-preview-header">
-      <h3>🔄 Hotspot Enrichment</h3>
-    </div>
-    <p style="margin:6px 0 12px;font-size:13px;color:#666;line-height:1.6">
-      Recalculates <b>nearest hotspot</b>, <b>displacement</b>, <b>demand count</b>, <b>idle count</b>, and <b>launch feasibility</b> for all properties. This writes updated values back to the sheet — run only when hotspot/demand/idle data has changed.
-    </p>
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button id="btnRecalcHotspots" class="primary" onclick="recalculateHotspots()">🔄 Recalculate Hotspot Data</button>
-      <span id="recalcStatus" style="font-size:13px;color:#555"></span>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════
-     INCENTIVE TRACKER  —  paste inside a .container div
-     or wrap in one as shown below
-     ══════════════════════════════════════════════════ -->
-<div class="container">
-  <div class="sheet-preview-card">
-
-    <!-- Header row — mirrors Sheet Preview header exactly -->
-    <div class="sheet-preview-header">
-      <h3>💰 Incentive Tracker</h3>
-      <span id="incRowCount" class="row-count"></span>
-      <button class="summary-dl-btn" onclick="downloadSummaryTable('incPrivateTable','incentive_private')" style="margin-left:auto">⬇ Private CSV</button>
-      <button class="summary-dl-btn" onclick="downloadSummaryTable('incPublicTable','incentive_public')" style="margin-left:4px">⬇ Public CSV</button>
-    </div>
-
-    <!-- Filter bar — mirrors sheet-filter-bar pattern -->
-    <div class="sheet-filter-bar">
-      <span class="date-filter-label">📅 Date Range:</span>
-      <input type="date" id="incDateFrom" />
-      <span style="color:#888;font-size:13px">to</span>
-      <input type="date" id="incDateTo" />
-    
-      <span class="date-filter-label">📍 Proximity:</span>
-      <select id="incProximity" style="min-width:180px">
-        <option value="all">All properties</option>
-        <option value="250">≤ 250m from hotspot only</option>
-      </select>
-    
-      <!-- NEW: Duplicate filter -->
-      <span class="date-filter-label">🔁 Duplicates:</span>
-      <select id="incDuplicates" style="min-width:180px">
-        <option value="all">Include duplicates</option>
-        <option value="exclude">Exclude duplicates</option>
-        <option value="only">Duplicates only</option>
-      </select>
-    
-      <button class="primary" onclick="applyIncentiveFilters()">Apply</button>
-      <button onclick="clearIncentiveFilters()">Clear</button>
-    </div>
-
-    <!-- Incentive formula note
-    <div style="margin-top:10px;padding:9px 14px;background:#fffbe6;border:1px solid #f0d060;border-radius:8px;font-size:12px;color:#7a6000;line-height:1.8">
-      <b>Incentive formula —</b><br>
-      <b>Private Launches:</b> 1=₹100 &nbsp;·&nbsp; 2=₹200 &nbsp;·&nbsp; 3=₹400 &nbsp;·&nbsp; 4=₹600 &nbsp;·&nbsp; 5=₹800 &nbsp;·&nbsp; 6=₹1000 (each extra adds ₹200 more)
-      &nbsp;&nbsp;+&nbsp;&nbsp;
-      <b>🚿 Washroom Bonus: ₹100 per property</b> with "Washroom" in Closure type
-      &nbsp;&nbsp;|&nbsp;&nbsp;
-      <b>Public:</b> ₹20 per launched property
-    </div> -->
-
-    <!-- Tables render here by renderIncentiveTables() -->
-    <div id="incentiveContainer" style="margin-top:14px">
-      <p style="color:#aaa;font-size:13px;padding:4px 0">Select a date range and click Apply to calculate incentives.</p>
-    </div>
-
-  </div>
-</div>
-  <div id="addPointModal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
-      <div class="modal-header">
-        <h3>📍 Add New Point</h3>
-        <button class="modal-close" onclick="closeAddPointModal()">✕</button>
-      </div>
-      <div class="modal-body">
-        <p style="margin:0 0 12px;font-size:13px;color:#888;">
-          Lat &amp; Long are set from where you clicked. All other fields are optional.
-        </p>
-        <div class="modal-grid" id="addPointFields"></div>
-      </div>
-      <div class="modal-footer">
-        <button onclick="closeAddPointModal()">Cancel</button>
-        <button class="primary" onclick="submitAddPoint()">💾 Save to Sheet</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ADD ROW MODAL (kept for backward-compat) -->
-  <div id="addRowModal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
-      <div class="modal-header">
-        <h3>＋ Add New Row</h3>
-        <button class="modal-close" onclick="closeAddRowModal()">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-grid" id="newRowFields"></div>
-      </div>
-      <div class="modal-footer">
-        <button onclick="closeAddRowModal()">Cancel</button>
-        <button class="primary" onclick="submitNewRow()">💾 Save Row</button>
-      </div>
-    </div>
-  </div>
 
   <style>
-    /* ── Add-Point active state ── */
-    #btnAddPoint.active { background: #c0392b !important; }
+    /* ── MapLibre popup override to match old Leaflet style ── */
+    .maplibregl-popup-content {
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      min-width: 160px;
+      max-width: 280px;
+    }
+    .maplibregl-popup-close-button {
+      font-size: 16px;
+      color: #888;
+      padding: 2px 6px;
+    }
+    /* Map canvas cursor override for add-point mode */
+    .map-crosshair .maplibregl-canvas { cursor: crosshair !important; }
 
-    /* ── Download row ── */
+    /* ── Download buttons ── */
     .download-row {
-      display: flex; align-items: center; flex-wrap: wrap;
-      gap: 6px; margin-top: 8px; padding-top: 8px;
-      border-top: 1px solid #e8e8e8;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
     }
-    .download-label { font-size: 12px; font-weight: 600; color: #777; white-space: nowrap; }
-    .dl-sep { color: #ccc; font-size: 16px; margin: 0 2px; }
+    .download-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+      white-space: nowrap;
+    }
     .dl-btn {
-      font-size: 12px; padding: 5px 10px; border: none;
-      border-radius: 5px; cursor: pointer; color: #fff;
-      font-weight: 500; transition: opacity 0.15s;
+      font-size: 11px;
+      padding: 4px 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      color: #fff;
+      font-weight: 600;
+      white-space: nowrap;
     }
-    .dl-btn:hover { opacity: 0.82; }
-    .dl-nm { background: #2980b9; }
-    .dl-mm { background: #8e44ad; }
-    .dl-pt { background: #16a085; }
-    .dl-hs { background: #e67e22; }
-    .dl-dm { background: #2471a3; }
-    .dl-id { background: #c0392b; }
-    .dl-ct { background: #1e8449; }
+    .dl-nm  { background: #2c3e50; }
+    .dl-mm  { background: #8e44ad; }
+    .dl-pt  { background: #27ae60; }
+    .dl-hs  { background: #e67e22; }
+    .dl-dm  { background: #2471a3; }
+    .dl-id  { background: #c0392b; }
+    .dl-ct  { background: #1e8449; }
 
     /* ── Map Legend ── */
     .map-legend {
@@ -494,6 +261,229 @@
       border-top: 2px solid #d0d0d0;
     }
   </style>
+</head>
+
+<body>
+
+  <div class="app">
+
+    <!-- HEADER -->
+    <div class="header">
+      <h2>📍 Seva Property Map</h2>
+    </div>
+
+    <!-- ACTION BUTTONS -->
+    <div class="container">
+      <div class="actions centered">
+        <button onclick="refreshData()">⟳ Refresh</button>
+        <button onclick="saveCurrent()">💾 Save</button>
+        <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
+        <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
+        <button id="btnAddPoint" class="primary" onclick="toggleAddPointMode()">➕ Add Point</button>
+      </div>
+    </div>
+
+    <!-- FILTERS + DOWNLOAD -->
+    <div class="container">
+      <div class="filters map-filter-bar">
+        <select id="filterCategory"><option value="">Category</option></select>
+        <select id="filterProperty"><option value="">Property</option></select>
+        <select id="filterAppStatus"><option value="">App status</option></select>
+        <select id="filterLeadStatus"><option value="">Lead Status</option></select>
+        <select id="filterFinalStatus"><option value="">Final Status</option></select>
+        <select id="filterNM"><option value="">NM</option></select>
+        <select id="filterMM"><option value="">MM</option></select>
+        <input type="date" id="filterDateFrom" onchange="applyFilters()" title="From date" />
+        <input type="date" id="filterDateTo"   onchange="applyFilters()" title="To date" />
+        <button class="primary" onclick="applyFilters()">Apply</button>
+        <button onclick="clearFilters()">Clear</button>
+      </div>
+
+      <!-- DOWNLOAD ROW -->
+      <div class="download-row">
+        <span class="download-label">⬇ Properties:</span>
+        <button class="dl-btn dl-nm"  onclick="downloadLayerKML('nm')">🗺 NM KML</button>
+        <button class="dl-btn dl-mm"  onclick="downloadLayerKML('mm')">🗺 MM KML</button>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerKML('points')">📍 KML</button>
+        <button class="dl-btn dl-nm"  onclick="downloadLayerCSV('nm')">📄 NM CSV</button>
+        <button class="dl-btn dl-mm"  onclick="downloadLayerCSV('mm')">📄 MM CSV</button>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerCSV('points')">📄 CSV</button>
+      </div>
+      <div class="download-row">
+        <span class="download-label">⬇ Layers (filtered):</span>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','kml')">🔥 Hotspots KML</button>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','csv')">🔥 Hotspots CSV</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','kml')">📦 Demand KML</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','csv')">📦 Demand CSV</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','kml')">🚗 Idle KML</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','csv')">🚗 Idle CSV</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','kml')">📊 Centroids KML</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','csv')">📊 Centroids CSV</button>
+      </div>
+    </div>
+
+    <!-- MAP + SEARCH + LEGEND -->
+    <div class="container">
+      <div class="map-card">
+        <!-- SEARCH BAR OVERLAID ON MAP -->
+        <div class="map-search-wrapper">
+          <input type="text" id="mapSearchInput" placeholder="🔍 Search location on map..." autocomplete="off"/>
+          <div id="mapSearchResults" class="search-results"></div>
+        </div>
+
+        <!-- LEGEND OVERLAID ON MAP -->
+        <div id="mapLegend" class="map-legend"></div>
+        <div class="map-style-toggle">
+          <button class="style-btn active" onclick="switchBaseMap('street', event)">Street</button>
+          <button class="style-btn" onclick="switchBaseMap('light', event)">Light</button>
+          <button class="style-btn" onclick="switchBaseMap('dark', event)">Dark</button>
+          <button class="style-btn" onclick="switchBaseMap('basic', event)">Basic</button>
+        </div>
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <!-- DETAILS -->
+    <div class="container">
+      <div class="details-card">
+        <h3>Details</h3>
+        <table id="detailsTable"></table>
+      </div>
+    </div>
+
+    <!-- SHEET PREVIEW -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 Sheet Preview</h3>
+          <span id="sheetRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadSheetPreviewCSV()" style="margin-left:auto">⬇ CSV</button>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <select id="sfCategory"><option value="">Category</option></select>
+          <select id="sfProperty"><option value="">Property</option></select>
+          <select id="sfAppStatus"><option value="">App Status</option></select>
+          <select id="sfLeadStatus"><option value="">Lead Status</option></select>
+          <select id="sfFinalStatus"><option value="">Final Status</option></select>
+          <select id="sfNM"><option value="">NM</option></select>
+          <select id="sfMM"><option value="">MM</option></select>
+        </div>
+        <div class="sheet-filter-bar" style="margin-top:6px">
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="sfDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="sfDateTo" />
+          <span class="date-filter-label">📅 Signage Date:</span>
+          <input type="date" id="sfSignageFrom" onchange="applySheetFilters()" />
+          <input type="date" id="sfSignageTo"   onchange="applySheetFilters()" />
+          <span class="date-filter-label">📅 Launch Date:</span>
+          <input type="date" id="sfLaunchFrom"  onchange="applySheetFilters()" />
+          <input type="date" id="sfLaunchTo"    onchange="applySheetFilters()" />
+          <button class="primary" onclick="applySheetFilters()">Apply</button>
+          <button onclick="clearSheetFilters()">Clear</button>
+        </div>
+
+        <div class="sheet-table-wrapper">
+          <table id="sheetPreviewTable"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUMMARY CROSS-TAB TABLES -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 Summary Tables</h3>
+          <span style="font-size:12px;color:#888">Final Status × Category &amp; Commercials breakdown</span>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <select id="stNM"><option value="">NM</option></select>
+          <select id="stMM"><option value="">MM</option></select>
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="stDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="stDateTo" />
+          <button class="primary" onclick="applySummaryFilters()">Apply</button>
+          <button onclick="clearSummaryFilters()">Clear</button>
+        </div>
+
+        <div id="summaryTablesContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- RECALCULATE HOTSPOT DATA -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔄 Hotspot Enrichment</h3>
+        </div>
+        <p style="margin:6px 0 12px;font-size:13px;color:#666;line-height:1.6">
+          Recalculates <b>nearest hotspot</b>, <b>displacement</b>, <b>demand count</b>, <b>idle count</b>, and <b>launch feasibility</b> for all properties. This writes updated values back to the sheet — run only when hotspot/demand/idle data has changed.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button id="btnRecalcHotspots" class="primary" onclick="recalculateHotspots()">🔄 Recalculate Hotspot Data</button>
+          <span id="recalcStatus" style="font-size:13px;color:#555"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- INCENTIVE TRACKER -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>💰 Incentive Tracker</h3>
+          <span id="incRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadSummaryTable('incPrivateTable','incentive_private')" style="margin-left:auto">⬇ Private CSV</button>
+          <button class="summary-dl-btn" onclick="downloadSummaryTable('incPublicTable','incentive_public')" style="margin-left:4px">⬇ Public CSV</button>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <span class="date-filter-label">📅 Date Range:</span>
+          <input type="date" id="incDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="incDateTo" />
+
+          <span class="date-filter-label">📍 Proximity:</span>
+          <select id="incProximity" style="min-width:180px">
+            <option value="all">All properties</option>
+            <option value="250">≤ 250m from hotspot only</option>
+          </select>
+
+          <span class="date-filter-label">🔁 Duplicates:</span>
+          <select id="incDuplicates" style="min-width:180px">
+            <option value="all">Include duplicates</option>
+            <option value="exclude">Exclude duplicates</option>
+            <option value="only">Show duplicates only</option>
+          </select>
+
+          <button class="primary" onclick="applyIncentiveFilters()">Apply</button>
+          <button onclick="clearIncentiveFilters()">Clear</button>
+        </div>
+
+        <div id="incentiveContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+  </div><!-- /.app -->
+
+  <!-- ADD POINT MODAL -->
+  <div id="addPointModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>➕ Add New Point</h3>
+        <button class="modal-close" onclick="closeAddPointModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid" id="addPointFields"></div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closeAddPointModal()">Cancel</button>
+        <button class="primary" onclick="submitAddPoint()">💾 Save Point</button>
+      </div>
+    </div>
+  </div>
 
 <script src="config.js"></script>
 <script src="app.js"></script>
