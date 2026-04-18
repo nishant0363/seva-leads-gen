@@ -1427,7 +1427,7 @@ function renderSheetPreview(data) {
     "MM", "NM", "NM Id", "Name of the property", "App status", "Category",
     "Closure type", "Lat", "Long", "Location (Google Maps URL) / Map Code",
     "Owner Contact Name", "Owner Contact Number",
-    "Contact Name", "Contact number", "Owner Designation"
+    "Contact Name", "Contact number", "Owner Designation",
     "Property", "Signage date", "Launch date",
     "Photo 1 (Image Upload) (From Road)",
     "Photo 2 (Image Upload) (Sitting Area)",
