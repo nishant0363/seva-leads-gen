@@ -396,6 +396,123 @@ select {
   border-top: 1px solid #eee;
 }
 
+/* REMINDER TABLE */
+#reminderTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+#reminderTable th {
+  background: #f8f9fa;
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #555;
+  border-bottom: 2px solid #eee;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+#reminderTable td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 12px;
+}
+#reminderTable tr:hover td { background: #f5f8ff; }
+.reminder-sign { background: #fff3cd; color: #856404; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+.reminder-chairs { background: #cff4fc; color: #0a4a5a; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+
+/* NM/MM SUMMARY */
+.nm-mm-grid {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.nm-mm-panel {
+  flex: 1;
+  min-width: 300px;
+}
+.nm-mm-panel h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #e8e8e8;
+}
+.washroom-resting-grid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.wr-card {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  flex: 1;
+  min-width: 200px;
+  cursor: pointer;
+}
+.wr-card:hover { background: #eef4ff; border-color: #aac; }
+.wr-card.active { background: #e3f2fd; border-color: #2196f3; }
+.wr-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+.wr-card-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #2c3e50;
+}
+.wr-card-pct {
+  font-size: 13px;
+  color: #888;
+  margin-left: 4px;
+}
+.wr-card-label {
+  font-size: 11px;
+  color: #777;
+  margin-top: 2px;
+}
+.wr-divider {
+  width: 100%;
+  border: none;
+  border-top: 1px solid #e8e8e8;
+  margin: 4px 0 8px;
+}
+.wr-highlight-list {
+  background: white;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.wr-highlight-list h5 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #444;
+}
+.wr-highlight-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #f0f0f0;
+  color: #333;
+}
+.wr-highlight-item:last-child { border-bottom: none; }
+
 /* SCROLL */
 ::-webkit-scrollbar {
   height: 6px;

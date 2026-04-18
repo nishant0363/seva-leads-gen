@@ -401,6 +401,7 @@
         <div class="sheet-filter-bar">
           <select id="stNM"><option value="">NM</option></select>
           <select id="stMM"><option value="">MM</option></select>
+          <select id="stProperty"><option value="">Property (All)</option><option value="Public">Public</option><option value="Private">Private</option></select>
           <span class="date-filter-label">📅 Timestamp:</span>
           <input type="date" id="stDateFrom" />
           <span style="color:#888;font-size:13px">to</span>
@@ -410,6 +411,43 @@
         </div>
 
         <div id="summaryTablesContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- NM / MM LEVEL SUMMARY -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 NM &amp; MM Level Summary (Active Properties)</h3>
+        </div>
+        <div id="nmMmSummaryContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- REMINDER FOR PROPERTY CLOSURES -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔔 Reminder for Property Closures</h3>
+          <span id="reminderRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadReminderCSV()" style="margin-left:auto">⬇ CSV</button>
+        </div>
+        <div class="sheet-filter-bar">
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="reminderDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="reminderDateTo" />
+          <select id="reminderStatusFilter" style="min-width:180px">
+            <option value="">Reminder Status (All)</option>
+            <option value="Sign Pending">Sign Pending</option>
+            <option value="Chairs and Poster Pending">Chairs and Poster Pending</option>
+          </select>
+          <button class="primary" onclick="applyReminderFilters()">Apply</button>
+          <button onclick="clearReminderFilters()">Clear</button>
+        </div>
+        <div class="sheet-table-wrapper" style="margin-top:10px">
+          <table id="reminderTable"></table>
+        </div>
       </div>
     </div>
 

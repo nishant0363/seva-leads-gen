@@ -557,6 +557,7 @@ async function loadData() {
     const sfActive = Object.values(getSheetFilters()).some(v => v);
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
     renderSummaryTables();
+    renderReminderTable();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -890,8 +891,24 @@ function getFilteredData() {
   });
 }
 
-function getFilteredNMs() { return [...new Set(getFilteredData().map(r => r.NM).filter(Boolean))]; }
-function getFilteredMMs() { return [...new Set(getFilteredData().map(r => r.MM).filter(Boolean))]; }
+function getFilteredNMs() {
+  // Use hoods as source of truth — all NMs from polygon sheet
+  // If a specific NM filter is active, return just that; if MM filter, filter by MM
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  if (filterNM) return [filterNM];
+  if (filterMM) return [...new Set(hoods.filter(h => h.micro_market === filterMM).map(h => h.nano_market).filter(Boolean))];
+  return [...new Set(hoods.map(h => h.nano_market).filter(Boolean))];
+}
+
+function getFilteredMMs() {
+  // Use hoods as source of truth — all MMs from polygon sheet
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  if (filterMM) return [filterMM];
+  if (filterNM) return [...new Set(hoods.filter(h => h.nano_market === filterNM).map(h => h.micro_market).filter(Boolean))];
+  return [...new Set(hoods.map(h => h.micro_market).filter(Boolean))];
+}
 function hoodsByNM(nmList) { return hoods.filter(h => nmList.includes(h.nano_market)); }
 function hoodsByMM(mmList) { return hoods.filter(h => mmList.includes(h.micro_market)); }
 
@@ -1487,6 +1504,7 @@ function getSummaryFilters() {
   return {
     NM:       document.getElementById("stNM")?.value       || "",
     MM:       document.getElementById("stMM")?.value       || "",
+    Property: document.getElementById("stProperty")?.value || "",
     dateFrom: document.getElementById("stDateFrom")?.value || "",
     dateTo:   document.getElementById("stDateTo")?.value   || "",
   };
@@ -1499,6 +1517,7 @@ function getSummaryFilteredData() {
   return allData.filter(row => {
     if (sf.NM && row.NM !== sf.NM) return false;
     if (sf.MM && row.MM !== sf.MM) return false;
+    if (sf.Property && row.Property !== sf.Property) return false;
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
@@ -1524,7 +1543,7 @@ function populateSummaryFilters() {
 function applySummaryFilters() { renderSummaryTables(); }
 
 function clearSummaryFilters() {
-  ["stNM","stMM","stDateFrom","stDateTo"].forEach(id => {
+  ["stNM","stMM","stProperty","stDateFrom","stDateTo"].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = "";
   });
   renderSummaryTables();
@@ -1550,7 +1569,7 @@ function renderSummaryTables() {
 
   const FIXED_FINAL_STATUSES = [
     "Total in funnel", "To be reactivated", "Cold", "Dropped off",
-    "Deal closed - sign pending", "Places Finalised",
+    "Deal closed - sign pending", "Places Finalised", "Launched",
     "Deal - closed - Chairs pending", "Deal closed", "No deal required"
   ];
 
@@ -1597,6 +1616,16 @@ function renderSummaryTables() {
       return `<tr class="summary-finalised-row">
         <td>Places Finalised</td>
         <td>${pct(finalisedRows.length, totalRows)}</td>
+        ${allCats.map(c => `<td>${pct(cats[c] || 0, data.filter(r => normalizeCategory(r.Category) === c).length)}</td>`).join("")}
+      </tr>`;
+    } else if (status === "Launched") {
+      const launchedRows = data.filter(r => (r["App status"] || "").trim() === "Active");
+      const totalRows = data.length;
+      const pct = (num, denom) => !denom ? "0 (0%)" : `${num} (${(num / denom * 100).toFixed(1)}%)`;
+      const cats = countByCat(launchedRows);
+      return `<tr class="summary-finalised-row" style="background:#e8f0ff!important;color:#1a3a7a">
+        <td>Launched</td>
+        <td>${pct(launchedRows.length, totalRows)}</td>
         ${allCats.map(c => `<td>${pct(cats[c] || 0, data.filter(r => normalizeCategory(r.Category) === c).length)}</td>`).join("")}
       </tr>`;
     } else {
@@ -1676,6 +1705,7 @@ function renderSummaryTables() {
     </div>`;
 
   container.innerHTML = section1 + section2;
+  renderNmMmSummary();
 }
 
 function downloadSummaryTable(tableId, filename) {
@@ -2007,6 +2037,275 @@ function clearIncentiveFilters() {
   const dup = document.getElementById("incDuplicates");
   if (dup) dup.value = "all";
   renderIncentiveTables();
+}
+
+// ============================================================
+// NM / MM LEVEL SUMMARY (Tasks 3 & 4)
+// ============================================================
+function renderNmMmSummary() {
+  const container = document.getElementById("nmMmSummaryContainer");
+  if (!container) return;
+
+  const FIXED_CATEGORIES = [
+    "Ladies PG", "Shop", "Restaurant", "Gated community",
+    "Independent Builder floor", "Bus Stop", "Park",
+    "Petrol Pump", "Public Washroom", "Other"
+  ];
+
+  const normalizeCategory = (cat) => cat === "Apartment" ? "Independent Builder floor" : cat;
+
+  const activeData = allData.filter(r => (r["App status"] || "").trim() === "Active");
+
+  // Helper: build category count table per groupKey — uses all hoods as source of truth
+  function buildGroupTable(groupKey, tableId) {
+    // Get all unique NM or MM values from hoods polygon sheet (source of truth)
+    const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
+    const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
+    if (!groups.length) return `<p style="color:#aaa;font-size:12px">No data.</p>`;
+
+    const rows = groups.map(g => {
+      const gRows = activeData.filter(r => r[groupKey] === g);
+      const cats = {};
+      FIXED_CATEGORIES.forEach(c => {
+        cats[c] = gRows.filter(r => normalizeCategory(r.Category) === c).length;
+      });
+      return `<tr data-group="${escHtml(g)}">
+        <td>${escHtml(g)}</td>
+        <td style="font-weight:700">${gRows.length}</td>
+        ${FIXED_CATEGORIES.map(c => `<td>${cats[c] || 0}</td>`).join("")}
+      </tr>`;
+    }).join("");
+
+    const totalCats = {};
+    FIXED_CATEGORIES.forEach(c => {
+      totalCats[c] = activeData.filter(r => r[groupKey] === undefined ? false : r[groupKey] && normalizeCategory(r.Category) === c).length;
+    });
+
+    return `
+      <div style="overflow-x:auto;max-height:400px;overflow-y:auto">
+        <table class="summary-table" id="${tableId}" style="min-width:700px">
+          <thead><tr>
+            <th>${groupKey}</th><th>Total Active</th>
+            ${FIXED_CATEGORIES.map(c => `<th>${escHtml(c)}</th>`).join("")}
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <button class="summary-dl-btn" style="margin-top:6px" onclick="downloadSummaryTable('${tableId}','active_by_${groupKey.toLowerCase()}')">⬇ CSV</button>`;
+  }
+
+  // Task 4: Washroom/Resting stats per NM and MM
+  const WASHROOM_TYPES = ["Resting + Washroom", "Washroom"];
+  const RESTING_TYPES  = ["Resting + Washroom", "Resting"];
+
+  function buildWrStats(groupKey, label) {
+    // Use hoods as source of truth for all NM/MM values
+    const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
+    const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
+    const total  = groups.length;
+    if (!total) return { statsHtml: `<p style="color:#aaa;font-size:12px">No data.</p>`, groups: [] };
+
+    const withWashroom  = groups.filter(g => activeData.some(r => r[groupKey] === g && WASHROOM_TYPES.includes(r["Closure type"] || "")));
+    const withResting   = groups.filter(g => activeData.some(r => r[groupKey] === g && RESTING_TYPES.includes(r["Closure type"] || "")));
+    const noWashroom    = groups.filter(g => !withWashroom.includes(g));
+    const noResting     = groups.filter(g => !withResting.includes(g));
+
+    const pct = (n) => total ? `(${(n / total * 100).toFixed(1)}%)` : "(0%)";
+
+    const cardHtml = (title, count, pctStr, colorClass, kind, gKey) =>
+      `<div class="wr-card" onclick="showWrHighlight('${kind}','${gKey}',this)" style="border-left:4px solid ${colorClass}">
+        <div class="wr-card-title">${escHtml(title)}</div>
+        <div class="wr-card-value">${count} <span class="wr-card-pct">${pctStr}</span></div>
+        <div class="wr-card-label">of ${total} total ${label}s</div>
+      </div>`;
+
+    const statsHtml = `
+      <div class="washroom-resting-grid">
+        ${cardHtml(`${label}s with Washroom`, withWashroom.length, pct(withWashroom.length), "#2196f3", "withWashroom", groupKey)}
+        ${cardHtml(`${label}s with Resting`, withResting.length, pct(withResting.length), "#4caf50", "withResting", groupKey)}
+      </div>
+      <hr class="wr-divider"/>
+      <div class="washroom-resting-grid">
+        ${cardHtml(`${label}s without Washroom`, noWashroom.length, pct(noWashroom.length), "#e53935", "noWashroom", groupKey)}
+        ${cardHtml(`${label}s without Resting`, noResting.length, pct(noResting.length), "#ff9800", "noResting", groupKey)}
+      </div>`;
+
+    return { statsHtml, withWashroom, withResting, noWashroom, noResting, total, groups };
+  }
+
+  const nmStats = buildWrStats("NM", "NM");
+  const mmStats = buildWrStats("MM", "MM");
+
+  container.innerHTML = `
+    <div class="nm-mm-grid" style="margin-bottom:24px">
+      <div class="nm-mm-panel">
+        <h4>NM Level — Active Properties by Category</h4>
+        ${buildGroupTable("NM", "nmActiveTable")}
+      </div>
+      <div class="nm-mm-panel">
+        <h4>MM Level — Active Properties by Category</h4>
+        ${buildGroupTable("MM", "mmActiveTable")}
+      </div>
+    </div>
+
+    <div class="nm-mm-grid">
+      <div class="nm-mm-panel">
+        <h4>NM Washroom &amp; Resting Coverage</h4>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total NMs: <b>${[...new Set(hoods.map(h => h.nano_market).filter(Boolean))].length}</b></div>
+        ${nmStats.statsHtml}
+      </div>
+      <div class="nm-mm-panel">
+        <h4>MM Washroom &amp; Resting Coverage</h4>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total MMs: <b>${[...new Set(hoods.map(h => h.micro_market).filter(Boolean))].length}</b></div>
+        ${mmStats.statsHtml}
+      </div>
+    </div>
+
+    <div id="wrHighlightCard" style="display:none;margin-top:16px" class="wr-highlight-list">
+      <h5 id="wrHighlightTitle"></h5>
+      <div id="wrHighlightItems"></div>
+    </div>`;
+
+  // Store stats for click handler
+  window._wrStatsNM = nmStats;
+  window._wrStatsMM = mmStats;
+}
+
+function showWrHighlight(kind, groupKey, clickedEl) {
+  // Deactivate other cards in same panel
+  clickedEl.closest(".nm-mm-panel").querySelectorAll(".wr-card").forEach(c => c.classList.remove("active"));
+  clickedEl.classList.add("active");
+
+  const stats = groupKey === "NM" ? window._wrStatsNM : window._wrStatsMM;
+  const groups = stats[kind] || [];
+  const tableId = groupKey === "NM" ? "nmActiveTable" : "mmActiveTable";
+  const label = groupKey === "NM" ? "NM" : "MM";
+
+  const kindLabel = {
+    withWashroom: `${label}s with Washroom`,
+    withResting:  `${label}s with Resting`,
+    noWashroom:   `${label}s without Washroom`,
+    noResting:    `${label}s without Resting`
+  }[kind] || kind;
+
+  const card = document.getElementById("wrHighlightCard");
+  document.getElementById("wrHighlightTitle").textContent = `${kindLabel} (${groups.length})`;
+  document.getElementById("wrHighlightItems").innerHTML = groups.length
+    ? groups.map(g => `<div class="wr-highlight-item">📍 ${escHtml(g)}</div>`).join("")
+    : `<div style="color:#aaa">None</div>`;
+  card.style.display = "block";
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// ============================================================
+// REMINDER FOR PROPERTY CLOSURES (Task 1)
+// ============================================================
+function getReminderStatus(row) {
+  const leadStatus  = (row["Lead Status"]  || "").trim();
+  const appStatus   = (row["App status"]   || "").trim();
+  const finalStatus = (row["Final Status"] || "").trim();
+
+  if (finalStatus === "Dropped off") return null;
+
+  const signPendingLeadStatuses = [
+    "5. Follow up required",
+    "3. Owner's confirmation pending",
+    "2. Owner conversation pending"
+  ];
+
+  if (signPendingLeadStatuses.includes(leadStatus)) return "Sign Pending";
+  if (appStatus === "Inactive") return "Chairs and Poster Pending";
+  return null;
+}
+
+function getReminderData() {
+  const from = document.getElementById("reminderDateFrom")?.value;
+  const to   = document.getElementById("reminderDateTo")?.value;
+  const statusFilter = document.getElementById("reminderStatusFilter")?.value || "";
+
+  const fromDate = from ? new Date(from + "T00:00:00") : null;
+  const toDate   = to   ? new Date(to   + "T23:59:59") : null;
+
+  return allData.filter(row => {
+    const finalStatus = (row["Final Status"] || "").trim();
+    if (finalStatus === "Dropped off") return false;
+
+    const reminderStatus = getReminderStatus(row);
+    if (!reminderStatus) return false;
+    if (statusFilter && reminderStatus !== statusFilter) return false;
+
+    if (fromDate || toDate) {
+      const ts = parseTimestamp(row["Timestamp"]);
+      if (!ts) return false;
+      if (fromDate && ts < fromDate) return false;
+      if (toDate   && ts > toDate)   return false;
+    }
+
+    return true;
+  }).map(row => ({ ...row, _reminderStatus: getReminderStatus(row) }));
+}
+
+function renderReminderTable() {
+  const table   = document.getElementById("reminderTable");
+  const countEl = document.getElementById("reminderRowCount");
+  if (!table) return;
+
+  const data = getReminderData();
+  if (countEl) countEl.textContent = `${data.length} rows`;
+
+  const COLS = [
+    "_reminderStatus", "Lead From", "Timestamp", "Email Address",
+    "MM", "NM", "Name of the property",
+    "Owner Contact Name", "Owner Contact Number", "Owner Designation",
+    "Lat", "Long"
+  ];
+
+  if (!data.length) {
+    table.innerHTML = `<tr><td colspan="99" style="text-align:center;color:#aaa;padding:16px">No reminders found for the selected filters.</td></tr>`;
+    return;
+  }
+
+  const availableCols = COLS.filter(c => c === "_reminderStatus" || data[0].hasOwnProperty(c));
+
+  const headerRow = availableCols.map(c => {
+    const label = c === "_reminderStatus" ? "Reminder Status" : c;
+    return `<th>${escHtml(label)}</th>`;
+  }).join("");
+
+  const bodyRows = data.map(row => {
+    return `<tr>${availableCols.map(c => {
+      if (c === "_reminderStatus") {
+        const cls = row._reminderStatus === "Sign Pending" ? "reminder-sign" : "reminder-chairs";
+        return `<td><span class="${cls}">${escHtml(row._reminderStatus)}</span></td>`;
+      }
+      const val = row[c] != null ? row[c] : "";
+      const display = c === "Timestamp" ? (formatTsDisplay(val) || escHtml(String(val))) : escHtml(String(val));
+      return `<td>${display}</td>`;
+    }).join("")}</tr>`;
+  }).join("");
+
+  table.innerHTML =
+    `<thead><tr>${headerRow}</tr></thead>` +
+    `<tbody>${bodyRows}</tbody>`;
+}
+
+function applyReminderFilters() { renderReminderTable(); }
+
+function clearReminderFilters() {
+  ["reminderDateFrom","reminderDateTo","reminderStatusFilter"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = "";
+  });
+  renderReminderTable();
+}
+
+function downloadReminderCSV() {
+  const table = document.getElementById("reminderTable");
+  if (!table) return;
+  const rows = [...table.querySelectorAll("thead tr, tbody tr")].map(tr =>
+    [...tr.querySelectorAll("th,td")].map(td => `"${td.innerText.replace(/"/g,'""')}"`).join(",")
+  );
+  const dateTag = new Date().toISOString().slice(0,10);
+  downloadBlob(rows.join("\n"), `reminder_closures_${dateTag}.csv`, "text/csv");
 }
 
 // ============================================================
