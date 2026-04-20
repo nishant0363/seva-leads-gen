@@ -33,7 +33,7 @@ const layerVisible = {
   hotspots:   true,
   demand:     false,
   idle:       false,
-  centroids:  true,
+  centroids:  true
 };
 
 const MAP_STYLES = {
@@ -229,14 +229,32 @@ function updateHoodVisibility() {
 function assignHood(coords) {
   const pt = turf.point([coords.lng, coords.lat]);
   let nearest = null, minDist = Infinity;
+
   for (let h of hoods) {
     const polygon = { type: "Feature", geometry: h.geometry };
     try {
+      // Step 1: exact containment — return immediately if inside
       if (turf.booleanPointInPolygon(pt, polygon)) return h;
-      const dist = turf.distance(pt, turf.centroid(polygon));
-      if (dist < minDist) { minDist = dist; nearest = h; }
+
+      // Step 2: distance to nearest boundary edge (not centroid)
+      // Convert polygon rings to line strings and measure point-to-line distance
+      const geom = h.geometry;
+      const rings = geom.type === "Polygon"
+        ? geom.coordinates
+        : geom.coordinates.flat(); // MultiPolygon — flatten to all rings
+
+      let hoodMinDist = Infinity;
+      for (const ring of rings) {
+        if (ring.length < 2) continue;
+        const line = turf.lineString(ring);
+        const d    = turf.pointToLineDistance(pt, line, { units: "kilometers" });
+        if (d < hoodMinDist) hoodMinDist = d;
+      }
+
+      if (hoodMinDist < minDist) { minDist = hoodMinDist; nearest = h; }
     } catch (e) {}
   }
+
   return nearest;
 }
 
