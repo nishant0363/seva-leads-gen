@@ -96,6 +96,19 @@ async function init() {
 
   // Map click handler
   map.on("click", function (e) {
+    // ── NEW: circle marking mode ──
+    if (markCirclesMode) {
+      addCirclePoint(e.lngLat.lat, e.lngLat.lng);
+      return;
+    }
+
+    // existing addPointMode check follows...
+    if (addPointMode) {
+      openAddPointModal(e.lngLat.lat, e.lngLat.lng);
+      return;
+    }
+    // ... rest of existing handler
+
     if (addPointMode) {
       openAddPointModal(e.lngLat.lat, e.lngLat.lng);
       return;
@@ -2939,4 +2952,170 @@ function isEmpty(val) { return !val || val.toString().trim() === "" || val === "
 
 function escHtml(str) {
   return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ============================================================
+// MARK CIRCLES MODE
+// ============================================================
+let markCirclesMode = false;
+let circlePoints = [];       // [{ lat, lng, name }]
+let circleMarkers = [];      // maplibregl.Marker[]
+
+function toggleMarkCirclesMode() {
+  markCirclesMode = !markCirclesMode;
+  const btn = document.getElementById("btnMarkCircles");
+
+  if (markCirclesMode) {
+    btn.textContent = "✅ Done — Download KMLs";
+    btn.style.background = "#27ae60";
+    btn.onclick = finishMarkCircles;
+    map.getContainer().classList.add("map-crosshair");
+
+    // Add a secondary clear button
+    const clearBtn = document.createElement("button");
+    clearBtn.id = "btnClearCirclePoints";
+    clearBtn.textContent = "🗑 Clear Points (" + circlePoints.length + ")";
+    clearBtn.style.cssText = "margin-left:8px;background:#e74c3c;color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px";
+    clearBtn.onclick = clearCirclePoints;
+    btn.parentNode.insertBefore(clearBtn, btn.nextSibling);
+
+  } else {
+    btn.textContent = "⭕ Mark Circle Points";
+    btn.style.background = "";
+    btn.onclick = toggleMarkCirclesMode;
+    map.getContainer().classList.remove("map-crosshair");
+    document.getElementById("btnClearCirclePoints")?.remove();
+  }
+}
+
+function clearCirclePoints() {
+  circleMarkers.forEach(m => m.remove());
+  circleMarkers = [];
+  circlePoints  = [];
+  const clearBtn = document.getElementById("btnClearCirclePoints");
+  if (clearBtn) clearBtn.textContent = "🗑 Clear Points (0)";
+}
+
+// Called from the main map click handler — add this check in your existing map.on("click") handler:
+// if (markCirclesMode) { addCirclePoint(e.lngLat.lat, e.lngLat.lng); return; }
+
+function addCirclePoint(lat, lng) {
+  const index = circlePoints.length + 1;
+  const name  = `Point ${index}`;
+
+  circlePoints.push({ lat, lng, name });
+
+  // Create a numbered marker
+  const el = document.createElement("div");
+  el.style.cssText = `
+    background:#9b59b6;color:#fff;border-radius:50%;
+    width:28px;height:28px;display:flex;align-items:center;
+    justify-content:center;font-weight:700;font-size:13px;
+    border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4);
+    cursor:default;user-select:none;
+  `;
+  el.textContent = index;
+
+  const popup = new maplibregl.Popup({ offset: 16 })
+    .setHTML(`<b>${name}</b><br><small>${lat.toFixed(7)}, ${lng.toFixed(7)}</small>`);
+
+  const marker = new maplibregl.Marker({ element: el })
+    .setLngLat([lng, lat])
+    .setPopup(popup)
+    .addTo(map);
+
+  circleMarkers.push(marker);
+
+  const clearBtn = document.getElementById("btnClearCirclePoints");
+  if (clearBtn) clearBtn.textContent = `🗑 Clear Points (${circlePoints.length})`;
+}
+
+function finishMarkCircles() {
+  if (!circlePoints.length) {
+    alert("No points marked yet. Click on the map to add points first.");
+    return;
+  }
+
+  // Generate and download both KMLs
+  const pointsSnapshot = circlePoints.slice();
+  downloadCircleKML(150, pointsSnapshot);
+  downloadCircleKML(300, pointsSnapshot);
+
+  // Exit mode
+  markCirclesMode = false;
+  const btn = document.getElementById("btnMarkCircles");
+  btn.textContent = "⭕ Mark Circle Points";
+  btn.style.background = "";
+  btn.onclick = toggleMarkCirclesMode;
+  map.getContainer().classList.remove("map-crosshair");
+  document.getElementById("btnClearCirclePoints")?.remove();
+
+  // Clean up markers
+  circleMarkers.forEach(m => m.remove());
+  circleMarkers = [];
+  circlePoints  = [];
+}
+
+// Generate a circle polygon as KML coordinates (approximated with N-sided polygon)
+function generateCircleKmlCoords(lat, lng, radiusMeters, numSides = 64) {
+  const coords = [];
+  const earthRadius = 6371000; // metres
+  const angularDist = radiusMeters / earthRadius;
+  const latRad = lat * Math.PI / 180;
+  const lngRad = lng * Math.PI / 180;
+
+  for (let i = 0; i <= numSides; i++) {
+    const bearing = (2 * Math.PI * i) / numSides;
+    const pLatRad = Math.asin(
+      Math.sin(latRad) * Math.cos(angularDist) +
+      Math.cos(latRad) * Math.sin(angularDist) * Math.cos(bearing)
+    );
+    const pLngRad = lngRad + Math.atan2(
+      Math.sin(bearing) * Math.sin(angularDist) * Math.cos(latRad),
+      Math.cos(angularDist) - Math.sin(latRad) * Math.sin(pLatRad)
+    );
+    coords.push(`${pLngRad * 180 / Math.PI},${pLatRad * 180 / Math.PI},0`);
+  }
+  return coords.join(" ");
+}
+
+function downloadCircleKML(radiusMeters, points) {
+  points = points || circlePoints;
+  const color = radiusMeters === 150 ? "7f00aaff" : "7f0055ff"; // AABBGGRR format in KML
+
+  const placemarks = points.map(p => `
+  <Placemark>
+    <name>${escXml(p.name)} — ${radiusMeters}m</name>
+    <description><![CDATA[
+      Center: ${p.lat.toFixed(7)}, ${p.lng.toFixed(7)}<br>
+      Radius: ${radiusMeters}m
+    ]]></description>
+    <Style>
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>2</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>${color}</color>
+        <outline>1</outline>
+      </PolyStyle>
+    </Style>
+    <Polygon>
+      <outerBoundaryIs>
+        <LinearRing>
+          <coordinates>${generateCircleKmlCoords(p.lat, p.lng, radiusMeters)}</coordinates>
+        </LinearRing>
+      </outerBoundaryIs>
+    </Polygon>
+  </Placemark>`).join("\n");
+
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Circle Points — ${radiusMeters}m radius</name>
+    ${placemarks}
+  </Document>
+</kml>`;
+
+  downloadBlob(kml, `circle_points_${radiusMeters}m.kml`, "application/vnd.google-earth.kml+xml");
 }
