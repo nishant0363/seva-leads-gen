@@ -33,7 +33,7 @@ const layerVisible = {
   hotspots:   true,
   demand:     false,
   idle:       false,
-  centroids:  true
+  centroids:  false
 };
 
 const MAP_STYLES = {
@@ -237,7 +237,6 @@ function assignHood(coords) {
       if (turf.booleanPointInPolygon(pt, polygon)) return h;
 
       // Step 2: distance to nearest boundary edge (not centroid)
-      // Convert polygon rings to line strings and measure point-to-line distance
       const geom = h.geometry;
       const rings = geom.type === "Polygon"
         ? geom.coordinates
@@ -409,6 +408,8 @@ function renderHotspots(data) {
     hotspotMarkers.push(m);
   });
   console.log(`📍 ${hotspotMarkers.length} hotspot markers`);
+  // Re-render coverage table now that hotspot data + NM/MM stamps are ready
+  renderHotspotCoverage();
 }
 
 // ── Render Demand as real heatmap ────────────────────────────
@@ -577,6 +578,7 @@ async function loadData() {
     renderSummaryTables();
     renderReminderTable();
     renderBangaloreOverview();
+    renderHotspotCoverage();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
   }
@@ -911,8 +913,6 @@ function getFilteredData() {
 }
 
 function getFilteredNMs() {
-  // Use hoods as source of truth — all NMs from polygon sheet
-  // If a specific NM filter is active, return just that; if MM filter, filter by MM
   const filterNM = activeFilters.NM || "";
   const filterMM = activeFilters.MM || "";
   if (filterNM) return [filterNM];
@@ -921,7 +921,6 @@ function getFilteredNMs() {
 }
 
 function getFilteredMMs() {
-  // Use hoods as source of truth — all MMs from polygon sheet
   const filterNM = activeFilters.NM || "";
   const filterMM = activeFilters.MM || "";
   if (filterMM) return [filterMM];
@@ -1440,7 +1439,7 @@ function populateSheetFilters() {
     const current = el.value;
     const vals    = [...new Set(allData.map(r => r[f.key]).filter(Boolean))].sort();
     el.innerHTML  = `<option value="">${f.key}</option>` +
-      vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
+      vals.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
     el.value = current;
   });
 }
@@ -1741,7 +1740,7 @@ function downloadSummaryTable(tableId, filename) {
 function refreshData() { loadData(); loadExtraLayers(); }
 
 // ============================================================
-// MAP SEARCH (Nominatim — unchanged logic, updated for MapLibre)
+// MAP SEARCH (Nominatim)
 // ============================================================
 function initMapSearch() {
   const input   = document.getElementById("mapSearchInput");
@@ -2063,14 +2062,12 @@ function clearIncentiveFilters() {
 // BANGALORE OVERVIEW DASHBOARD
 // ============================================================
 
-// Returns 0–1 similarity score between two strings (LCS ratio after normalisation)
 function fuzzyScore(str, query) {
   if (!str || !query) return 0;
   const s = str.toLowerCase().replace(/[^a-z0-9]/g, "");
   const q = query.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (s === q) return 1;
   if (s.includes(q) || q.includes(s)) return 0.85;
-  // LCS-based similarity
   const m = s.length, n = q.length;
   const dp = Array.from({length: m+1}, () => new Array(n+1).fill(0));
   for (let i = 1; i <= m; i++)
@@ -2081,7 +2078,6 @@ function fuzzyScore(str, query) {
 
 function fuzzyMatch(str, query) { return fuzzyScore(str, query) >= 0.5; }
 
-// Region names as provided — these are MM names used as fallback
 const BANGALORE_REGION_MMS = {
   "Mid Belt": [
     "Bellandur","Brookefield","Hoodi","Kudlu","Mahadevapura","Marathahalli",
@@ -2097,12 +2093,9 @@ const BANGALORE_REGION_MMS = {
   ]
 };
 
-// Build region→MM mapping via fuzzy matching of hood micro_market names
-// against the known MM lists, since the region field is not subdivided.
 function buildRegionMaps() {
   const allHoodMMs = [...new Set(hoods.map(h => h.micro_market).filter(Boolean))];
 
-  // Debug: log actual MM values from hoods so mismatches can be spotted
   console.log("🗺️ Hood MMs available:", allHoodMMs.sort().join(", "));
 
   const result = { source: "fuzzy_mm", "Mid Belt": [], "North": [], "South": [] };
@@ -2167,7 +2160,6 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
     });
   }
 
-  // Select base dataset by property type
   const scopedActive = propertyType === "Private" ? privateActive
                      : propertyType === "Public"  ? publicActive
                      : activeData;
@@ -2183,7 +2175,6 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
     )];
   }
 
-  // NM/MM helpers scoped to the chosen property type
   function nmHasActive(nm)        { return scopedUniq.some(r => r.NM === nm); }
   function nmHasWashroom(nm)      { return scopedUniq.some(r => r.NM === nm && WASHROOM_TYPES.includes(r["Closure type"] || "")); }
   function nmHasResting(nm)       { return scopedUniq.some(r => r.NM === nm && RESTING_TYPES.includes(r["Closure type"] || "")); }
@@ -2206,11 +2197,9 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
            d.getDate()     === now.getDate();
   }
 
-  // Launches — always Private
   const launchedToday = privUniq.filter(r => isToday(r["Launch date"])).length;
   const launchedTotal = privUniq.length;
 
-  // Region stats
   const blrMMs     = [...new Set([...regionMaps["Mid Belt"], ...regionMaps["North"], ...regionMaps["South"]])];
   const blrNMs     = nmsForMMs(blrMMs);
   const blrTotal   = blrNMs.length;
@@ -2232,7 +2221,6 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
       </tr>`;
   }
 
-  // Pipeline penetration — always Private vs any lead
   const nmsWithPrivateActive = allHoodNMs.filter(nmHasPrivateActive).length;
   const nmsWithAnyLead       = allHoodNMs.filter(nmHasAnyLead).length;
   const mmsWithPrivateActive = allHoodMMs.filter(mmHasPrivateActive).length;
@@ -2312,13 +2300,12 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
 }
 
 // ============================================================
-// NM / MM LEVEL SUMMARY (Tasks 3 & 4)
+// NM / MM LEVEL SUMMARY
 // ============================================================
 function renderNmMmSummary() {
   const container = document.getElementById("nmMmSummaryContainer");
   if (!container) return;
 
-  // Read Property filter (Public / Private / all)
   const propFilter = document.getElementById("nmMmPropertyFilter")?.value || "";
 
   const FIXED_CATEGORIES = [
@@ -2329,11 +2316,9 @@ function renderNmMmSummary() {
 
   const normalizeCategory = (cat) => cat === "Apartment" ? "Independent Builder floor" : cat;
 
-  // Base active data — optionally filtered by Property type
   let activeData = allData.filter(r => (r["App status"] || "").trim() === "Active");
   if (propFilter) activeData = activeData.filter(r => (r["Property"] || "") === propFilter);
 
-  // Helper: build category count table per groupKey — uses all hoods as source of truth
   function buildGroupTable(groupKey, tableId) {
     const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
     const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
@@ -2370,7 +2355,6 @@ function renderNmMmSummary() {
       </div>`;
   }
 
-  // Washroom/Resting stats
   const WASHROOM_TYPES = ["Resting + Washroom", "Washroom"];
   const RESTING_TYPES  = ["Resting + Washroom", "Resting"];
 
@@ -2459,7 +2443,6 @@ function renderNmMmSummary() {
       <div id="wrHighlightItems"></div>
     </div>`;
 
-  // Store stats for click handler
   window._wrStatsNM = nmStats;
   window._wrStatsMM = mmStats;
 }
@@ -2494,7 +2477,6 @@ function openNmMmFullscreen(tableId, title) {
   const srcTable = document.getElementById(tableId);
   if (!srcTable) return;
 
-  // Create overlay
   const overlay = document.createElement("div");
   overlay.id = "nmMmFullscreenOverlay";
   overlay.style.cssText = `
@@ -2522,21 +2504,18 @@ function openNmMmFullscreen(tableId, title) {
 
   document.body.appendChild(overlay);
 
-  // Clone table into fullscreen with new id
   const clone = srcTable.cloneNode(true);
   clone.id = tableId + "_fs";
   clone.style.minWidth = srcTable.style.minWidth;
   document.getElementById("nmMmFsTableWrap").appendChild(clone);
 
-  // Close on backdrop click
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
-  // Close on Escape
   const escHandler = (e) => { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", escHandler); } };
   document.addEventListener("keydown", escHandler);
 }
 
 // ============================================================
-// REMINDER FOR PROPERTY CLOSURES (Task 1)
+// REMINDER FOR PROPERTY CLOSURES
 // ============================================================
 function getReminderStatus(row) {
   const leadStatus  = (row["Lead Status"]  || "").trim();
@@ -2645,6 +2624,310 @@ function downloadReminderCSV() {
   const dateTag = new Date().toISOString().slice(0,10);
   downloadBlob(rows.join("\n"), `reminder_closures_${dateTag}.csv`, "text/csv");
 }
+
+// ============================================================
+// HOTSPOT COVERAGE TABLE
+// ============================================================
+function renderHotspotCoverage() {
+  const table   = document.getElementById("hotspotCoverageTable");
+  const countEl = document.getElementById("hotspotCoverageCount");
+  if (!table) return;
+
+  // ── Filters ──────────────────────────────────────────────────
+  const fMM      = document.getElementById("hcFilterMM")?.value      || "";
+  const fNM      = document.getElementById("hcFilterNM")?.value      || "";
+  const fHotspot = document.getElementById("hcFilterHotspot")?.value || "";
+  const fClosed  = document.getElementById("hcFilterClosed")?.value  || "";
+
+  // ── Active properties from main sheet ───────────────────────
+  const activeProps = allData.filter(r => (r["App status"] || "").trim() === "Active");
+  const seenNames = new Set();
+  const uniqueActive = activeProps.filter(r => {
+    const n = (r["Name of the property"] || "").trim().toLowerCase();
+    if (!n || seenNames.has(n)) return false;
+    seenNames.add(n);
+    return true;
+  });
+
+  // ── NM Id lookup helper ───────────────────────────────────────
+  function getNmId(nmName) {
+    const h = hoods.find(h => h.nano_market === nmName);
+    return h ? (h.hood_id || "") : "";
+  }
+
+  // ── Build one row per hotspot ─────────────────────────────────
+  let rows = hotspotData.map(hs => {
+    const hsName = (hs.name || "").trim();
+    const linked = uniqueActive.filter(r =>
+      (r["nearest hotspot"] || "").trim().toLowerCase() === hsName.toLowerCase()
+    );
+    const privateProps = linked.filter(r => (r["Property"] || "") === "Private");
+    const publicProps  = linked.filter(r => (r["Property"] || "") === "Public");
+    const isClosed     = privateProps.length > 0 ? "Yes" : "No";
+    const nmName       = hs._nm || "";
+
+    return {
+      MM:            hs._mm || "",
+      NM:            nmName,
+      "NM Id":       getNmId(nmName),
+      "Hotspot Name": hsName,
+      isClosed,
+      "Num Private": privateProps.length,
+      "Num Public":  publicProps.length,
+      _allProps:     linked,
+    };
+  });
+
+  // ── Populate filter dropdowns ─────────────────────────────────
+  populateHotspotCoverageFilters(rows);
+
+  // ── Apply filters ─────────────────────────────────────────────
+  if (fMM)      rows = rows.filter(r => r.MM === fMM);
+  if (fNM)      rows = rows.filter(r => r.NM === fNM);
+  if (fHotspot) rows = rows.filter(r => r["Hotspot Name"] === fHotspot);
+  if (fClosed)  rows = rows.filter(r => r.isClosed === fClosed);
+
+  // ── Sort: NMs with most closed hotspots first ─────────────────
+  const nmClosedCount = {};
+  rows.forEach(r => {
+    if (!nmClosedCount[r.NM]) nmClosedCount[r.NM] = 0;
+    if (r.isClosed === "Yes") nmClosedCount[r.NM]++;
+  });
+  rows.sort((a, b) => {
+    const diff = (nmClosedCount[b.NM] || 0) - (nmClosedCount[a.NM] || 0);
+    if (diff !== 0) return diff;
+    if (a.NM < b.NM) return -1;
+    if (a.NM > b.NM) return  1;
+    return a["Hotspot Name"].localeCompare(b["Hotspot Name"]);
+  });
+
+  // Store for CSV export
+  window._hotspotCoverageRows = rows;
+
+  if (countEl) countEl.textContent = `${rows.length} hotspots`;
+
+  if (!rows.length) {
+    table.innerHTML = `<thead><tr><th>No data</th></tr></thead><tbody><tr><td style="text-align:center;color:#aaa;padding:16px">
+      No hotspots found. Make sure hotspot data is loaded and properties have been enriched.
+    </td></tr></tbody>`;
+    return;
+  }
+
+  // ── Table header — isCLM_informed removed, Lat/Long added ─────
+  const thead = `
+    <thead>
+      <tr>
+        <th style="text-align:left">MM</th>
+        <th style="text-align:left">NM</th>
+        <th style="text-align:left">NM Id</th>
+        <th style="text-align:left">Hotspot Name</th>
+        <th>isClosed</th>
+        <th>Num Private</th>
+        <th>Num Public</th>
+        <th style="text-align:left">Property Name</th>
+        <th style="text-align:left">Property Type</th>
+        <th style="text-align:left">Closure Type</th>
+        <th>Displacement (m)</th>
+        <th style="text-align:left">Lat, Long</th>
+      </tr>
+    </thead>`;
+
+  const tbody = rows.map(r => {
+    const closedBadge = r.isClosed === "Yes"
+      ? `<span style="padding:2px 10px;border-radius:10px;font-weight:700;font-size:11px;background:#e8f8f0;color:#1a7a4a">Yes</span>`
+      : `<span style="padding:2px 10px;border-radius:10px;font-weight:700;font-size:11px;background:#f5f5f5;color:#aaa">No</span>`;
+
+    const props = r._allProps;
+
+    // ── No linked properties row ───────────────────────────────
+    if (!props.length) {
+      return `<tr>
+        <td>${escHtml(r.MM)}</td>
+        <td>${escHtml(r.NM)}</td>
+        <td style="color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
+        <td style="font-weight:600">${escHtml(r["Hotspot Name"])}</td>
+        <td style="text-align:center">${closedBadge}</td>
+        <td style="text-align:center;color:#8e44ad;font-weight:700">0</td>
+        <td style="text-align:center;color:#27ae60;font-weight:700">0</td>
+        <td style="color:#ccc">—</td>
+        <td style="color:#ccc">—</td>
+        <td style="color:#ccc">—</td>
+        <td style="color:#ccc">—</td>
+        <td style="color:#ccc">—</td>
+      </tr>`;
+    }
+
+    // ── One row per linked property, with rowspan on hotspot cols ─
+    return props.map((p, idx) => {
+      const isFirst   = idx === 0;
+      const rowspan   = props.length;
+      const dispVal   = p["displacement to nearest hotspot"];
+      const dispDisp  = dispVal !== undefined && dispVal !== "" ? `${dispVal}m` : "—";
+      const propType  = p["Property"] || "—";
+      const typeColor = propType === "Private" ? "#8e44ad" : propType === "Public" ? "#27ae60" : "#888";
+      const closureType = p["Closure type"] || "—";
+
+      // Build Lat, Long display for this property
+      const pLat = p.Lat, pLng = p.Long;
+      const latLngDisplay = (pLat && pLng && !isNaN(parseFloat(pLat)) && !isNaN(parseFloat(pLng)))
+        ? `${parseFloat(pLat).toFixed(7)}, ${parseFloat(pLng).toFixed(7)}`
+        : "—";
+
+      const hsCell = isFirst ? `
+        <td rowspan="${rowspan}">${escHtml(r.MM)}</td>
+        <td rowspan="${rowspan}">${escHtml(r.NM)}</td>
+        <td rowspan="${rowspan}" style="color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
+        <td rowspan="${rowspan}" style="font-weight:600">${escHtml(r["Hotspot Name"])}</td>
+        <td rowspan="${rowspan}" style="text-align:center">${closedBadge}</td>
+        <td rowspan="${rowspan}" style="text-align:center;color:#8e44ad;font-weight:700">${r["Num Private"]}</td>
+        <td rowspan="${rowspan}" style="text-align:center;color:#27ae60;font-weight:700">${r["Num Public"]}</td>
+      ` : "";
+
+      return `<tr>
+        ${hsCell}
+        <td style="font-size:11px;text-align:left">${escHtml(p["Name of the property"] || "—")}</td>
+        <td style="font-size:11px;text-align:left;color:${typeColor};font-weight:600">${escHtml(propType)}</td>
+        <td style="font-size:11px;text-align:left;color:#555">${escHtml(closureType)}</td>
+        <td style="text-align:center;font-size:11px;color:#555">${dispDisp}</td>
+        <td style="font-size:11px;color:#555;white-space:nowrap">${escHtml(latLngDisplay)}</td>
+      </tr>`;
+    }).join("");
+  }).join("");
+
+  table.className = "summary-table";
+  table.style.minWidth = "1200px";
+  table.innerHTML = thead + `<tbody>${tbody}</tbody>`;
+}
+
+function populateHotspotCoverageFilters(rows) {
+  const mms      = [...new Set(rows.map(r => r.MM).filter(Boolean))].sort();
+  const nms      = [...new Set(rows.map(r => r.NM).filter(Boolean))].sort();
+  const hotspots = [...new Set(rows.map(r => r["Hotspot Name"]).filter(Boolean))].sort();
+
+  const fill = (id, vals, label) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = `<option value="">${label}</option>` +
+      vals.map(v => `<option value="${escHtml(v)}" ${v === cur ? "selected" : ""}>${escHtml(v)}</option>`).join("");
+  };
+
+  fill("hcFilterMM",      mms,      "MM (All)");
+  fill("hcFilterNM",      nms,      "NM (All)");
+  fill("hcFilterHotspot", hotspots, "Hotspot (All)");
+}
+
+function applyHotspotCoverageFilters()  { renderHotspotCoverage(); }
+
+function clearHotspotCoverageFilters() {
+  ["hcFilterMM","hcFilterNM","hcFilterHotspot","hcFilterClosed"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = "";
+  });
+  renderHotspotCoverage();
+}
+
+function downloadHotspotCoverageCSV() {
+  const rows = window._hotspotCoverageRows;
+  if (!rows || !rows.length) { alert("No data to export."); return; }
+
+  // isCLM_informed removed; Lat, Long added
+  const COLS = ["MM","NM","NM Id","Hotspot Name","isClosed","Num Private","Num Public",
+                "Property Name","Property Type","Closure Type","Displacement (m)","Lat, Long"];
+
+  const csvRows = [COLS.map(c => `"${c}"`).join(",")];
+
+  rows.forEach(r => {
+    const props = r._allProps;
+    if (!props.length) {
+      // No linked property — Lat,Long blank
+      csvRows.push([
+        r.MM, r.NM, r["NM Id"], r["Hotspot Name"],
+        r.isClosed, r["Num Private"], r["Num Public"],
+        "", "", "", "", ""
+      ].map(v => `"${String(v ?? "").replace(/"/g,'""')}"`).join(","));
+    } else {
+      props.forEach(p => {
+        const disp = p["displacement to nearest hotspot"];
+        const pLat = p.Lat, pLng = p.Long;
+        const latLng = (pLat && pLng && !isNaN(parseFloat(pLat)) && !isNaN(parseFloat(pLng)))
+          ? `${parseFloat(pLat).toFixed(7)}, ${parseFloat(pLng).toFixed(7)}`
+          : "";
+        csvRows.push([
+          r.MM, r.NM, r["NM Id"], r["Hotspot Name"],
+          r.isClosed, r["Num Private"], r["Num Public"],
+          p["Name of the property"] || "",
+          p["Property"] || "",
+          p["Closure type"] || "",
+          disp !== undefined && disp !== "" ? disp : "",
+          latLng
+        ].map(v => `"${String(v ?? "").replace(/"/g,'""')}"`).join(","));
+      });
+    }
+  });
+
+  downloadBlob(csvRows.join("\n"), `hotspot_coverage_${new Date().toISOString().slice(0,10)}.csv`, "text/csv");
+}
+
+async function saveHotspotCoverageToSheet() {
+  const rows = window._hotspotCoverageRows;
+  if (!rows || !rows.length) { alert("No data to save."); return; }
+
+  const btn    = document.getElementById("btnSaveHotspotSheet");
+  const status = document.getElementById("hotspotSheetSaveStatus");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ Saving…"; }
+  if (status) { status.textContent = "Writing to sheet…"; status.style.color = "#555"; }
+
+  // isCLM_informed removed; Lat, Long added
+  // NOTE: The Apps Script merge uses MM|NM|Hotspot Name|Property Name as key.
+  // Any manual columns you add to the sheet (like isCLM_informed) are preserved
+  // because the merge only overwrites the columns listed in HEADERS below.
+  const HEADERS = ["MM","NM","NM Id","Hotspot Name","isClosed","Num Private","Num Public",
+                   "Property Name","Property Type","Closure Type","Displacement (m)","Lat, Long"];
+
+  const flatRows = [];
+  rows.forEach(r => {
+    const props = r._allProps;
+    if (!props.length) {
+      flatRows.push([r.MM, r.NM, r["NM Id"], r["Hotspot Name"],
+        r.isClosed, r["Num Private"], r["Num Public"], "", "", "", "", ""]);
+    } else {
+      props.forEach(p => {
+        const disp = p["displacement to nearest hotspot"];
+        const pLat = p.Lat, pLng = p.Long;
+        const latLng = (pLat && pLng && !isNaN(parseFloat(pLat)) && !isNaN(parseFloat(pLng)))
+          ? `${parseFloat(pLat).toFixed(7)}, ${parseFloat(pLng).toFixed(7)}`
+          : "";
+        flatRows.push([
+          r.MM, r.NM, r["NM Id"], r["Hotspot Name"],
+          r.isClosed, r["Num Private"], r["Num Public"],
+          p["Name of the property"] || "",
+          p["Property"] || "",
+          p["Closure type"] || "",
+          disp !== undefined && disp !== "" ? disp : "",
+          latLng
+        ]);
+      });
+    }
+  });
+
+  try {
+    const res  = await fetch(CONFIG.API_URL, {
+      method: "POST",
+      body: JSON.stringify({ _action: "writeHotspotClosure", headers: HEADERS, rows: flatRows })
+    });
+    const json = await res.json();
+    if (json.success) {
+      if (status) { status.textContent = `✅ Saved ${flatRows.length} rows to "hotspot closure" sheet`; status.style.color = "#27ae60"; }
+    } else {
+      if (status) { status.textContent = "❌ " + (json.error || "Unknown error"); status.style.color = "#c0392b"; }
+    }
+  } catch (err) {
+    if (status) { status.textContent = "❌ " + err.message; status.style.color = "#c0392b"; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Save to Sheet"; }
+  }
+}
+
 
 // ============================================================
 // UTILITIES

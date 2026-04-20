@@ -484,6 +484,37 @@
       </div>
     </div>
 
+    <!-- HOTSPOT COVERAGE -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔥 Hotspot Coverage</h3>
+          <span id="hotspotCoverageCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadHotspotCoverageCSV()" style="margin-left:auto">⬇ CSV</button>
+          <button id="btnSaveHotspotSheet" class="summary-dl-btn" onclick="saveHotspotCoverageToSheet()"
+                  style="margin-left:6px;background:#2c3e50">💾 Save to Sheet</button>
+          <span id="hotspotSheetSaveStatus" style="font-size:12px;color:#555;margin-left:8px"></span>
+        </div>
+
+        <div class="sheet-filter-bar" style="margin-top:6px">
+          <select id="hcFilterMM"       style="min-width:130px"><option value="">MM (All)</option></select>
+          <select id="hcFilterNM"       style="min-width:130px"><option value="">NM (All)</option></select>
+          <select id="hcFilterHotspot"  style="min-width:160px"><option value="">Hotspot (All)</option></select>
+          <select id="hcFilterClosed"   style="min-width:140px">
+            <option value="">isClosed (All)</option>
+            <option value="Yes">Yes — Closed</option>
+            <option value="No">No — Open</option>
+          </select>
+          <button class="primary" onclick="applyHotspotCoverageFilters()">Apply</button>
+          <button onclick="clearHotspotCoverageFilters()">Clear</button>
+        </div>
+
+        <div class="sheet-table-wrapper" style="margin-top:10px;max-height:520px;overflow-y:auto">
+          <table id="hotspotCoverageTable"></table>
+        </div>
+      </div>
+    </div>
+
     <!-- RECALCULATE HOTSPOT DATA -->
     <div class="container">
       <div class="sheet-preview-card">
