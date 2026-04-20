@@ -2197,9 +2197,15 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
            d.getDate()     === now.getDate();
   }
 
-  const launchedToday = privUniq.filter(r => isToday(r["Launch date"])).length;
-  const launchedTotal = privUniq.length;
+  const launchScopeUniq = propertyType === "Private" ? privUniq
+                        : propertyType === "Public"  ? pubUniq
+                        : scopedUniq;
 
+  const launchedToday = launchScopeUniq.filter(r => isToday(r["Launch date"])).length;
+  const launchedTotal = launchScopeUniq.length;
+  const launchSectionLabel = propertyType === "Private" ? "Private Property Launches"
+                         : propertyType === "Public"  ? "Public Property Launches"
+                         : "All Property Launches";
   const blrMMs     = [...new Set([...regionMaps["Mid Belt"], ...regionMaps["North"], ...regionMaps["South"]])];
   const blrNMs     = nmsForMMs(blrMMs);
   const blrTotal   = blrNMs.length;
@@ -2275,12 +2281,9 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
     </div>
 
     <div style="margin-bottom:20px">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">
-        🚀 Private Property Launches
-      </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        ${tile("📅", "Launched Today", launchedToday, "Private · App Status = Active · Launch date = today", "#e67e22")}
-        ${tile("📦", "Launched Total", launchedTotal, "All Private · App Status = Active",                   "#27ae60")}
+        ${tile("📅", "Launched Today", launchedToday, `${propertyType === "All" ? "All" : propertyType} · App Status = Active · Launch date = today`, "#e67e22")}
+        ${tile("📦", "Launched Total", launchedTotal, `${propertyType === "All" ? "All" : propertyType} · App Status = Active`, "#27ae60")}
       </div>
     </div>
 
