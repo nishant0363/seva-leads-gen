@@ -2285,21 +2285,21 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
         ${tile("📅", "Launched Today", launchedToday, `${propertyType === "All" ? "All" : propertyType} · App Status = Active · Launch date = today`, "#e67e22")}
         ${tile("📦", "Launched Total", launchedTotal, `${propertyType === "All" ? "All" : propertyType} · App Status = Active`, "#27ae60")}
       </div>
-    </div>
-
-    <div>
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">
-        📊 Pipeline Penetration (Private Active vs Any Lead)
-      </div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap">
-        ${tile("🗺️", "NMs: Private Active / Any Lead",
-          `${nmsWithPrivateActive} / ${nmsWithAnyLead}`,
-          pct(nmsWithPrivateActive, nmsWithAnyLead), "#0288d1")}
-        ${tile("🗺️", "MMs: Private Active / Any Lead",
-          `${mmsWithPrivateActive} / ${mmsWithAnyLead}`,
-          pct(mmsWithPrivateActive, mmsWithAnyLead), "#00838f")}
-      </div>
     </div>`;
+
+    // <div>
+    //   <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">
+    //     📊 Pipeline Penetration (Private Active vs Any Lead)
+    //   </div>
+    //   <div style="display:flex;gap:12px;flex-wrap:wrap">
+    //     ${tile("🗺️", "NMs: Private Active / Any Lead",
+    //       `${nmsWithPrivateActive} / ${nmsWithAnyLead}`,
+    //       pct(nmsWithPrivateActive, nmsWithAnyLead), "#0288d1")}
+    //     ${tile("🗺️", "MMs: Private Active / Any Lead",
+    //       `${mmsWithPrivateActive} / ${mmsWithAnyLead}`,
+    //       pct(mmsWithPrivateActive, mmsWithAnyLead), "#00838f")}
+    //   </div>
+    // </div>`;
 }
 
 // ============================================================
