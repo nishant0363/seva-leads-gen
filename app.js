@@ -52,15 +52,12 @@ const HOODS_LINE    = "hoods-line";
 // ============================================================
 // SORT UTILITY
 // ============================================================
-// sortState: { col: string|null, dir: 'asc'|'desc' }
-// Returns sorted copy of data array
 function sortData(data, sortState) {
   if (!sortState || !sortState.col) return data;
   const { col, dir } = sortState;
   return [...data].sort((a, b) => {
     const av = a[col] != null ? String(a[col]) : "";
     const bv = b[col] != null ? String(b[col]) : "";
-    // Try numeric
     const an = parseFloat(av), bn = parseFloat(bv);
     let cmp;
     if (!isNaN(an) && !isNaN(bn)) {
@@ -72,10 +69,6 @@ function sortData(data, sortState) {
   });
 }
 
-// Render a sort bar above a table
-// tableId used as prefix for sort state storage
-// cols: array of column name strings
-// onSort: callback(col, dir)
 function renderSortBar(containerId, cols, sortState, onSort) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -104,7 +97,6 @@ function renderSortBar(containerId, cols, sortState, onSort) {
   });
 }
 
-// Per-table sort states
 const sortStates = {};
 function getSortState(key) {
   if (!sortStates[key]) sortStates[key] = { col: null, dir: "asc" };
@@ -495,9 +487,6 @@ function getFilteredCentroids() { return centroidData.filter(passesNMMFilter);  
 // ============================================================
 // MAIN DATA LOADING
 // ============================================================
-// ============================================================
-// MAIN DATA LOADING
-// ============================================================
 async function loadData() {
   const url = CONFIG.API_URL + "?t=" + Date.now();
   console.log("📡 loadData() —", url);
@@ -508,14 +497,12 @@ async function loadData() {
     allData = data;
     console.log(`✅ ${allData.length} rows loaded`);
 
-    // renderMarkers first so assignHood() fills NM/MM on all rows
     if (Object.values(activeFilters).some(v => v)) {
       filterAndRender();
     } else {
       renderMarkers();
     }
 
-    // populate ALL dropdowns AFTER NM/MM are assigned
     populateFilters();
     populateSheetFilters();
     populateSummaryFilters();
@@ -615,7 +602,7 @@ function renderMarkers() {
 }
 
 // ============================================================
-// FILTERS (Map filter bar — multi-select)
+// FILTERS (Map filter bar)
 // ============================================================
 function applyFilters() {
   activeFilters = {
@@ -1073,7 +1060,7 @@ function formatTsDisplay(val) {
 }
 
 // ============================================================
-// SHEET PREVIEW  (+ Closure type filter, multi-select, sort, row numbers)
+// SHEET PREVIEW
 // ============================================================
 function getSheetFilters() {
   return {
@@ -1169,15 +1156,10 @@ function populateSheetFilters() {
   });
 }
 
-// ============================================================
-// SHEET PREVIEW
-// ============================================================
 function renderSheetPreview(data) {
   const table   = document.getElementById("sheetPreviewTable");
   const countEl = document.getElementById("sheetRowCount");
   if (!table) return;
-
-  // REMOVED: populateSheetFilters() from here — now called once in loadData()
 
   const previewCols = [
     "MM","NM","NM Id","Name of the property","App status","Category","Closure type",
@@ -1192,7 +1174,6 @@ function renderSheetPreview(data) {
   ];
   const availableCols = data.length ? previewCols.filter(c => data[0].hasOwnProperty(c)) : previewCols;
 
-  // Sort bar
   const sortBarId = "sheetPreviewSortBar";
   let sortBarEl = document.getElementById(sortBarId);
   if (!sortBarEl) {
@@ -1250,7 +1231,6 @@ function renderSheetPreview(data) {
   });
 }
 
-
 function downloadSheetPreviewCSV() {
   const table = document.getElementById("sheetPreviewTable");
   if (!table) return;
@@ -1261,7 +1241,8 @@ function downloadSheetPreviewCSV() {
 }
 
 // ============================================================
-// CROSS-TAB SUMMARY TABLE  (multi-select filters, sort, row numbers)
+// CROSS-TAB SUMMARY TABLE
+// FIX: cells with a non-zero value get a light green background
 // ============================================================
 function getSummaryFilters() {
   return {
@@ -1314,12 +1295,24 @@ function clearSummaryFilters() {
   renderSummaryTables();
 }
 
+// Helper: renders a <td> with light green background when value > 0, plain otherwise
+function greenCatCell(val) {
+  const n = val || 0;
+  return n > 0
+    ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${n}</td>`
+    : `<td>${n}</td>`;
+}
+
+// Helper: renders a total <td> with light green when count > 0
+function greenTotalCell(n) {
+  return n > 0
+    ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:700">${n}</td>`
+    : `<td>0</td>`;
+}
 
 function renderSummaryTables() {
   const container = document.getElementById("summaryTablesContainer");
   if (!container) return;
-
-  // REMOVED: populateSummaryFilters() from here — now called once in loadData()
 
   const data = getSummaryFilteredData();
   if (!data.length) { container.innerHTML = `<p style="color:#aaa;padding:12px">No data for selected filters.</p>`; return; }
@@ -1340,17 +1333,41 @@ function renderSummaryTables() {
       const finalisedRows = data.filter(r => ["Deal closed","Deal - closed - Chairs pending","No deal required"].includes(r["Final Status"]));
       const pct = (num,denom) => !denom ? "0 (0%)" : `${num} (${(num/denom*100).toFixed(1)}%)`;
       const cats = countByCat(finalisedRows);
-      return `<tr class="summary-finalised-row"><td class="rn-cell">${rowIdx+1}</td><td>Places Finalised</td><td>${pct(finalisedRows.length,data.length)}</td>${FIXED_CATEGORIES.map(c=>`<td>${pct(cats[c]||0,data.filter(r=>normalizeCategory(r.Category)===c).length)}</td>`).join("")}</tr>`;
+      const totalDenom = data.length;
+      const totalPct = pct(finalisedRows.length, totalDenom);
+      const totalGreen = finalisedRows.length > 0
+        ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:700">${totalPct}</td>`
+        : `<td>${totalPct}</td>`;
+      return `<tr class="summary-finalised-row"><td class="rn-cell">${rowIdx+1}</td><td>Places Finalised</td>${totalGreen}${FIXED_CATEGORIES.map(c=>{
+        const num = cats[c]||0;
+        const denom = data.filter(r=>normalizeCategory(r.Category)===c).length;
+        const txt = pct(num, denom);
+        return num > 0
+          ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>`
+          : `<td>${txt}</td>`;
+      }).join("")}</tr>`;
     } else if (status === "Launched") {
       const launchedRows = data.filter(r => (r["App status"]||"").trim()==="Active");
       const pct = (num,denom) => !denom ? "0 (0%)" : `${num} (${(num/denom*100).toFixed(1)}%)`;
       const cats = countByCat(launchedRows);
-      return `<tr class="summary-finalised-row" style="background:#e8f0ff!important;color:#1a3a7a"><td class="rn-cell">${rowIdx+1}</td><td>Launched</td><td>${pct(launchedRows.length,data.length)}</td>${FIXED_CATEGORIES.map(c=>`<td>${pct(cats[c]||0,data.filter(r=>normalizeCategory(r.Category)===c).length)}</td>`).join("")}</tr>`;
+      const totalDenom = data.length;
+      const totalPct = pct(launchedRows.length, totalDenom);
+      const totalGreen = launchedRows.length > 0
+        ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:700">${totalPct}</td>`
+        : `<td>${totalPct}</td>`;
+      return `<tr class="summary-finalised-row" style="background:#e8f0ff!important;color:#1a3a7a"><td class="rn-cell">${rowIdx+1}</td><td>Launched</td>${totalGreen}${FIXED_CATEGORIES.map(c=>{
+        const num = cats[c]||0;
+        const denom = data.filter(r=>normalizeCategory(r.Category)===c).length;
+        const txt = pct(num, denom);
+        return num > 0
+          ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>`
+          : `<td>${txt}</td>`;
+      }).join("")}</tr>`;
     } else {
       rows = data.filter(r => r["Final Status"] === status);
     }
     const cats = countByCat(rows);
-    return `<tr><td class="rn-cell">${rowIdx+1}</td><td>${escHtml(status)}</td><td>${rows.length}</td>${FIXED_CATEGORIES.map(c=>`<td>${cats[c]||0}</td>`).join("")}</tr>`;
+    return `<tr><td class="rn-cell">${rowIdx+1}</td><td>${escHtml(status)}</td>${greenTotalCell(rows.length)}${FIXED_CATEGORIES.map(c=>greenCatCell(cats[c]||0)).join("")}</tr>`;
   }).join("");
 
   const section1 = `
@@ -1378,10 +1395,10 @@ function renderSummaryTables() {
       commRowNum++;
       const bucketRows = closureRows.filter(r => normalizeCommercial(r["Commercials"]) === bucket);
       const cats = countByCat(bucketRows);
-      return `<tr><td class="rn-cell">${commRowNum}</td><td style="padding-left:16px">${bucket}</td><td>${bucketRows.length}</td>${FIXED_CATEGORIES.map(c=>`<td>${cats[c]||0}</td>`).join("")}</tr>`;
+      return `<tr><td class="rn-cell">${commRowNum}</td><td style="padding-left:16px">${bucket}</td>${greenTotalCell(bucketRows.length)}${FIXED_CATEGORIES.map(c=>greenCatCell(cats[c]||0)).join("")}</tr>`;
     }).join("");
     const subtotalCats = countByCat(closureRows);
-    return headerRow + valueRows + `<tr style="background:#f5f5f5"><td class="rn-cell">Σ</td><td><i>Subtotal</i></td><td>${closureRows.length}</td>${FIXED_CATEGORIES.map(c=>`<td>${subtotalCats[c]}</td>`).join("")}</tr>`;
+    return headerRow + valueRows + `<tr style="background:#f5f5f5"><td class="rn-cell">Σ</td><td><i>Subtotal</i></td>${greenTotalCell(closureRows.length)}${FIXED_CATEGORIES.map(c=>greenCatCell(subtotalCats[c]||0)).join("")}</tr>`;
   }).join("");
 
   const section2 = `
@@ -1460,7 +1477,7 @@ function selectSearchResult(lat, lng, name) {
 }
 
 // ============================================================
-// INCENTIVE TRACKER  (multi-select filters, row numbers)
+// INCENTIVE TRACKER
 // ============================================================
 function getIncentiveFilters() {
   return {
@@ -1495,9 +1512,8 @@ function renderIncentiveTables() {
   const srNoToName = {};
   allData.forEach(r => { const srNo = String(r["Sr No"]||"").trim(); if (srNo && (r["Duplicate"]||"").trim().toLowerCase()!=="duplicate") srNoToName[srNo]=(r["Name of the property"]||"").trim(); });
 
-  // FIXED: inRange handles no-date-filter case + null launch dates
   const inRange = (val) => {
-    if (!from && !to) return true;  // no filter set — all rows pass
+    if (!from && !to) return true;
     if (!val) return false;
     const ts = parseTimestamp(val);
     if (!ts) return false;
@@ -1506,7 +1522,6 @@ function renderIncentiveTables() {
     return true;
   };
 
-  // FIXED: email column name + Lead From for display name
   const emailGroups = {};
   base.forEach(r => {
     const email = (r["Email"] || r["email"] || r["Email Address"] || "").trim().toLowerCase();
@@ -1517,7 +1532,6 @@ function renderIncentiveTables() {
 
   function buildTableData(propType) {
     return Object.entries(emailGroups).map(([email, rows]) => {
-      // FIXED: use "Lead From" column for display name
       const name = rows.find(r => r["Lead From"])?.["Lead From"]
                 || rows.find(r => r["Name"])?.["Name"]
                 || rows.find(r => r["name"])?.["name"]
@@ -1598,6 +1612,7 @@ function clearIncentiveFilters() {
 
 // ============================================================
 // BANGALORE OVERVIEW
+// FIX: removed uniqueByName() deduplication — counts use raw active rows
 // ============================================================
 function fuzzyScore(str,query){
   if(!str||!query)return 0;
@@ -1645,28 +1660,32 @@ function renderBangaloreOverview() {
 }
 
 function buildBangaloreOverviewHTML(propertyType,regionMaps){
+  // FIX: no name-based deduplication — use raw active rows directly
   const activeData=allData.filter(r=>(r["App status"]||"").trim()==="Active");
   const publicActive=activeData.filter(r=>(r["Property"]||"")==="Public");
   const privateActive=activeData.filter(r=>(r["Property"]||"")==="Private");
+
   const WASHROOM_TYPES=["Resting + Washroom","Washroom"];
   const RESTING_TYPES=["Resting + Washroom","Resting"];
-  const allHoodNMs=[...new Set(hoods.map(h=>h.nano_market).filter(Boolean))];
-  const allHoodMMs=[...new Set(hoods.map(h=>h.micro_market).filter(Boolean))];
-  function uniqueByName(rows){const seen=new Set();return rows.filter(r=>{const n=(r["Name of the property"]||"").trim().toLowerCase();if(!n||seen.has(n))return false;seen.add(n);return true;});}
+
   const scopedActive=propertyType==="Private"?privateActive:propertyType==="Public"?publicActive:activeData;
-  const scopedUniq=uniqueByName(scopedActive);
-  const privUniq=uniqueByName(privateActive);
-  const pubUniq=uniqueByName(publicActive);
+
+  // For launchedToday / launchedTotal — use scoped active rows directly
+  const launchScopeActive=propertyType==="Private"?privateActive:propertyType==="Public"?publicActive:activeData;
+
   function nmsForMMs(mmList){return[...new Set(hoods.filter(h=>mmList.includes(h.micro_market)).map(h=>h.nano_market).filter(Boolean))];}
-  function nmHasActive(nm){return scopedUniq.some(r=>r.NM===nm);}
-  function nmHasWashroom(nm){return scopedUniq.some(r=>r.NM===nm&&WASHROOM_TYPES.includes(r["Closure type"]||""));}
-  function nmHasResting(nm){return scopedUniq.some(r=>r.NM===nm&&RESTING_TYPES.includes(r["Closure type"]||""));}
+  function nmHasActive(nm){return scopedActive.some(r=>r.NM===nm);}
+  function nmHasWashroom(nm){return scopedActive.some(r=>r.NM===nm&&WASHROOM_TYPES.includes(r["Closure type"]||""));}
+  function nmHasResting(nm){return scopedActive.some(r=>r.NM===nm&&RESTING_TYPES.includes(r["Closure type"]||""));}
+
   const pct=(n,d)=>d?`${(n/d*100).toFixed(1)}%`:"0%";
   const fmt=(n,d)=>`<b>${n}</b> <span style="color:#888;font-size:11px">(${pct(n,d)})</span>`;
+
   function isToday(val){if(!val)return false;const d=parseTimestamp(val);if(!d)return false;const now=new Date();return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate();}
-  const launchScopeUniq=propertyType==="Private"?privUniq:propertyType==="Public"?pubUniq:scopedUniq;
-  const launchedToday=launchScopeUniq.filter(r=>isToday(r["Launch date"])).length;
-  const launchedTotal=launchScopeUniq.length;
+
+  const launchedToday=launchScopeActive.filter(r=>isToday(r["Launch date"])).length;
+  const launchedTotal=launchScopeActive.length;
+
   const blrMMs=[...new Set([...regionMaps["Mid Belt"],...regionMaps["North"],...regionMaps["South"]])];
   const blrNMs=nmsForMMs(blrMMs);
   const blrTotal=blrNMs.length;
@@ -1674,10 +1693,13 @@ function buildBangaloreOverviewHTML(propertyType,regionMaps){
   const blrWithWashroom=blrNMs.filter(nmHasWashroom);
   const blrWithResting=blrNMs.filter(nmHasResting);
   const blrWithBoth=blrNMs.filter(nm=>nmHasWashroom(nm)&&nmHasResting(nm));
+
   function regionRow(regionName){const mms=regionMaps[regionName]||[];const regionNMs=nmsForMMs(mms);const withActive=regionNMs.filter(nmHasActive);return`<tr><td style="font-weight:600;color:#34495e">${escHtml(regionName)} Bangalore</td><td style="text-align:center">${mms.length} MMs → <b>${regionNMs.length}</b> NMs</td><td style="text-align:center">${fmt(withActive.length,regionNMs.length)}</td></tr>`;}
+
   const coverageLabel=propertyType==="All"?"All Active":`${propertyType} Active`;
   const tile=(icon,label,value,sub,color="#2c3e50")=>`<div style="background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:14px 18px;border-left:4px solid ${color};min-width:160px;flex:1"><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">${icon} ${escHtml(label)}</div><div style="font-size:22px;font-weight:800;color:${color}">${value}</div>${sub?`<div style="font-size:11px;color:#999;margin-top:3px">${sub}</div>`:""}</div>`;
   const sourceNote=`<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">fuzzy MM match</span>`;
+
   return`
     <div style="margin-bottom:20px">
       <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">📍 NM Coverage — ${coverageLabel} Properties ${sourceNote}</div>
@@ -1706,7 +1728,7 @@ function buildBangaloreOverviewHTML(propertyType,regionMaps){
 }
 
 // ============================================================
-// NM / MM SUMMARY  (sort + row numbers)
+// NM / MM SUMMARY
 // ============================================================
 function renderNmMmSummary() {
   const container = document.getElementById("nmMmSummaryContainer");
@@ -1811,7 +1833,6 @@ function renderNmMmSummary() {
   window._wrStatsNM=nmStats;
   window._wrStatsMM=mmStats;
 
-  // Render sort bars after HTML is injected
   ["nmActiveTable","mmActiveTable"].forEach(tableId => {
     const sortBarId = `${tableId}_sortbar`;
     const groupKey = tableId === "nmActiveTable" ? "NM" : "MM";
@@ -1866,7 +1887,7 @@ function openNmMmFullscreen(tableId, title) {
 }
 
 // ============================================================
-// REMINDER TABLE  (multi-select filters, sort, row numbers)
+// REMINDER TABLE
 // ============================================================
 function getReminderStatus(row) {
   const leadStatus  = (row["Lead Status"]  || "").trim();
@@ -1908,7 +1929,6 @@ function renderReminderTable() {
 
   let data = getReminderData();
 
-  // Sort bar
   const COLS = ["_reminderStatus","Lead From","Timestamp","Email Address","MM","NM","Name of the property","Owner Contact Name","Owner Contact Number","Owner Designation","Lat","Long"];
   const availableCols = COLS.filter(c => c === "_reminderStatus" || (data[0] && data[0].hasOwnProperty(c)));
   const sortBarId = "reminderSortBar";
@@ -1975,7 +1995,8 @@ function downloadReminderCSV() {
 }
 
 // ============================================================
-// HOTSPOT COVERAGE TABLE  (multi-select filters, sort, row numbers + new distance/NM logic)
+// HOTSPOT COVERAGE TABLE
+// FIX: property-level cells all have explicit text-align:left
 // ============================================================
 function haversineMetres(lat1, lng1, lat2, lng2) {
   const R = 6371000;
@@ -1996,7 +2017,6 @@ function renderHotspotCoverage() {
   const fHotspot = document.getElementById("hcFilterHotspot")?.value || "";
   const fClosed  = document.getElementById("hcFilterClosed")?.value  || "";
 
-  // Active properties — unique by name
   const activeProps = allData.filter(r => (r["App status"]||"").trim()==="Active");
   const seenNames = new Set();
   const uniqueActive = activeProps.filter(r => {
@@ -2008,7 +2028,6 @@ function renderHotspotCoverage() {
 
   function getNmId(nmName) { const h=hoods.find(h=>h.nano_market===nmName); return h?(h.hood_id||""):""; }
 
-  // Build rows — association by ≤500m OR same NM
   let rows = hotspotData.map(hs => {
     const hsLat = parseFloat(hs.lat);
     const hsLng = parseFloat(hs.lng);
@@ -2038,16 +2057,13 @@ function renderHotspotCoverage() {
     };
   });
 
-  // Populate multi-select filters
   populateHotspotCoverageFilters(rows);
 
-  // Apply filters
   if (fMM)      rows = rows.filter(r => r.MM === fMM);
   if (fNM)      rows = rows.filter(r => r.NM === fNM);
   if (fHotspot) rows = rows.filter(r => r["Hotspot Name"] === fHotspot);
   if (fClosed)  rows = rows.filter(r => r.isClosed === fClosed);
 
-  // Sort
   const sortBarId = "hotspotCoverageSortBar";
   let sortBarEl = document.getElementById(sortBarId);
   if (!sortBarEl) {
@@ -2062,7 +2078,6 @@ function renderHotspotCoverage() {
     renderHotspotCoverage();
   });
 
-  // Default sort: NMs with most closed hotspots first
   if (!ss.col) {
     const nmClosedCount = {};
     rows.forEach(r => { if(!nmClosedCount[r.NM])nmClosedCount[r.NM]=0; if(r.isClosed==="Yes")nmClosedCount[r.NM]++; });
@@ -2097,9 +2112,10 @@ function renderHotspotCoverage() {
       globalRowNum++;
       return `<tr>
         <td class="rn-cell">${globalRowNum}</td>
-        <td>${escHtml(r.MM)}</td><td>${escHtml(r.NM)}</td>
-        <td style="color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
-        <td style="font-weight:600">${escHtml(r["Hotspot Name"])}</td>
+        <td style="text-align:left">${escHtml(r.MM)}</td>
+        <td style="text-align:left">${escHtml(r.NM)}</td>
+        <td style="text-align:left;color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
+        <td style="text-align:left;font-weight:600">${escHtml(r["Hotspot Name"])}</td>
         <td style="text-align:center">${closedBadge}</td>
         <td style="text-align:center;color:#8e44ad;font-weight:700">0</td>
         <td style="text-align:center;color:#27ae60;font-weight:700">0</td>
@@ -2119,20 +2135,20 @@ function renderHotspotCoverage() {
       globalRowNum++;
       const rnCell = isFirst ? `<td class="rn-cell" rowspan="${rowspan}">${globalRowNum}</td>` : "";
       const hsCell = isFirst ? `
-        <td rowspan="${rowspan}">${escHtml(r.MM)}</td>
-        <td rowspan="${rowspan}">${escHtml(r.NM)}</td>
-        <td rowspan="${rowspan}" style="color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
-        <td rowspan="${rowspan}" style="font-weight:600">${escHtml(r["Hotspot Name"])}</td>
+        <td rowspan="${rowspan}" style="text-align:left">${escHtml(r.MM)}</td>
+        <td rowspan="${rowspan}" style="text-align:left">${escHtml(r.NM)}</td>
+        <td rowspan="${rowspan}" style="text-align:left;color:#888;font-size:11px">${escHtml(r["NM Id"])}</td>
+        <td rowspan="${rowspan}" style="text-align:left;font-weight:600">${escHtml(r["Hotspot Name"])}</td>
         <td rowspan="${rowspan}" style="text-align:center">${closedBadge}</td>
         <td rowspan="${rowspan}" style="text-align:center;color:#8e44ad;font-weight:700">${r["Num Private"]}</td>
         <td rowspan="${rowspan}" style="text-align:center;color:#27ae60;font-weight:700">${r["Num Public"]}</td>` : "";
       return `<tr>
         ${rnCell}${hsCell}
-        <td style="font-size:11px">${escHtml(p["Name of the property"]||"—")}</td>
-        <td style="font-size:11px;color:${typeColor};font-weight:600">${escHtml(propType)}</td>
-        <td style="font-size:11px;color:#555">${escHtml(p["Closure type"]||"—")}</td>
+        <td style="font-size:11px;text-align:left">${escHtml(p["Name of the property"]||"—")}</td>
+        <td style="font-size:11px;color:${typeColor};font-weight:600;text-align:left">${escHtml(propType)}</td>
+        <td style="font-size:11px;color:#555;text-align:left">${escHtml(p["Closure type"]||"—")}</td>
         <td style="text-align:center;font-size:11px;color:#555">${dispDisp}</td>
-        <td style="font-size:11px;color:#555;white-space:nowrap">${escHtml(latLngDisplay)}</td>
+        <td style="font-size:11px;color:#555;white-space:nowrap;text-align:left">${escHtml(latLngDisplay)}</td>
       </tr>`;
     }).join("");
   }).join("");
@@ -2181,7 +2197,7 @@ function downloadHotspotCoverageCSV() {
     } else {
       props.forEach(p => {
         const disp=p["displacement to nearest hotspot"];
-        const pLat=p.Lat, pLng=p.Long;
+        const pLat=p.Lat,pLng=p.Long;
         const latLng=(pLat&&pLng&&!isNaN(parseFloat(pLat))&&!isNaN(parseFloat(pLng)))?`${parseFloat(pLat).toFixed(7)}, ${parseFloat(pLng).toFixed(7)}`:"";
         csvRows.push([r.MM,r.NM,r["NM Id"],r["Hotspot Name"],r.isClosed,r["Num Private"],r["Num Public"],p["Name of the property"]||"",p["Property"]||"",p["Closure type"]||"",disp!==undefined&&disp!==""?disp:"",latLng].map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(","));
       });
