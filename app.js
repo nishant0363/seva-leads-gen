@@ -22,15 +22,19 @@ let demandData    = [];
 let idleData      = [];
 let centroidData  = [];
 
-const layerVisible = {
-  hoods:      true,
-  properties: true,
-  hotspots:   true,
-  demand:     false,
-  idle:       false,
-  centroids:  true
-};
+let hoodExpertData = []; // from Hood Experts Count subsheet
+const HOOD_EXPERTS_SOURCE = "hood-experts-source";
+const HOOD_EXPERTS_FILL = "hood-experts-fill";
 
+const layerVisible = {
+  hoods:       true,
+  properties:  true,
+  hotspots:    true,
+  demand:      false,
+  idle:        false,
+  centroids:   true,
+  hoodExperts: false,  // NEW
+};
 const MAP_STYLES = {
   street: "https://tiles.openfreemap.org/styles/liberty",
   light:  "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -195,6 +199,7 @@ function switchBaseMap(styleKey, event) {
     await loadExtraLayers();
     renderMarkers();
     buildLegend();
+    if (hoodExpertData.length) drawHoodExpertsLayer();
   });
 }
 
@@ -293,12 +298,13 @@ function buildLegend() {
   const legend = document.getElementById("mapLegend");
   if (!legend) return;
   const items = [
-    { key: "hoods",      color: "#4da6ff", symbol: "■", label: "Hood Polygons"    },
-    { key: "properties", color: "#e74c3c", symbol: "📍", label: "Properties"      },
-    { key: "hotspots",   color: "#f39c12", symbol: "H",  label: "Hotspots"        },
-    { key: "demand",     color: "#2980b9", symbol: "🌊", label: "Demand Heatmap"  },
-    { key: "idle",       color: "#c0392b", symbol: "🔥", label: "Idle Heatmap"    },
-    { key: "centroids",  color: "#27ae60", symbol: "C",  label: "Demand Centroids"}
+    { key: "hoods",       color: "#4da6ff", symbol: "■",  label: "Hood Polygons"        },
+    { key: "properties",  color: "#e74c3c", symbol: "📍", label: "Properties"           },
+    { key: "hotspots",    color: "#f39c12", symbol: "H",  label: "Hotspots"             },
+    { key: "demand",      color: "#2980b9", symbol: "🌊", label: "Demand Heatmap"       },
+    { key: "idle",        color: "#c0392b", symbol: "🔥", label: "Idle Heatmap"         },
+    { key: "centroids",   color: "#27ae60", symbol: "C",  label: "Demand Centroids"     },
+    { key: "hoodExperts", color: "#8e44ad", symbol: "★",  label: "Hood Experts Layer"   },
   ];
   legend.innerHTML = `<div class="legend-title">Layers</div>` +
     items.map(item => `
@@ -315,12 +321,13 @@ function toggleLayer(key) {
   const item = document.getElementById("legend_" + key);
   if (eye)  eye.textContent    = layerVisible[key] ? "👁" : "🚫";
   if (item) item.style.opacity = layerVisible[key] ? "1" : "0.4";
-  if (key === "hoods")      updateHoodVisibility();
-  if (key === "properties") propertyMarkers.forEach(m => { m.getElement().style.display = layerVisible.properties ? "" : "none"; });
-  if (key === "hotspots")   hotspotMarkers.forEach(m => { m.getElement().style.display = layerVisible.hotspots ? "" : "none"; });
-  if (key === "demand" && map.getLayer(DEMAND_LAYER)) map.setLayoutProperty(DEMAND_LAYER, "visibility", layerVisible.demand ? "visible" : "none");
-  if (key === "idle"   && map.getLayer(IDLE_LAYER))   map.setLayoutProperty(IDLE_LAYER,   "visibility", layerVisible.idle   ? "visible" : "none");
-  if (key === "centroids") centroidMarkers.forEach(m => { m.getElement().style.display = layerVisible.centroids ? "" : "none"; });
+  if (key === "hoods")       updateHoodVisibility();
+  if (key === "properties")  propertyMarkers.forEach(m => { m.getElement().style.display = layerVisible.properties ? "" : "none"; });
+  if (key === "hotspots")    hotspotMarkers.forEach(m => { m.getElement().style.display = layerVisible.hotspots ? "" : "none"; });
+  if (key === "demand"  && map.getLayer(DEMAND_LAYER)) map.setLayoutProperty(DEMAND_LAYER, "visibility", layerVisible.demand ? "visible" : "none");
+  if (key === "idle"    && map.getLayer(IDLE_LAYER))   map.setLayoutProperty(IDLE_LAYER,   "visibility", layerVisible.idle   ? "visible" : "none");
+  if (key === "centroids")   centroidMarkers.forEach(m => { m.getElement().style.display = layerVisible.centroids ? "" : "none"; });
+  if (key === "hoodExperts") updateHoodExpertsVisibility();
 }
 
 // ============================================================
@@ -333,6 +340,7 @@ async function loadExtraLayers() {
     loadLayer(CONFIG.DEMAND_URL,   "demand",    renderDemand),
     loadLayer(CONFIG.IDLE_URL,     "idle",      renderIdle),
     loadLayer(CONFIG.CENTROID_URL, "centroids", renderCentroids),
+    loadHoodExpertData(),
   ]);
 }
 
@@ -389,14 +397,89 @@ function renderHotspots(data) {
   data.forEach(row => {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
-    const html = `<b>🔥 ${row.name || "Hotspot"}</b><br>Hood: ${row.hood || "-"}<br>Cluster: ${row.cluster || "-"}<br>NM: ${row._nm || "-"}<br>MM: ${row._mm || "-"}`;
-    const m = createLetterMarker(lat, lng, "H", "#f39c12", html, row);
+
+    // Build rich popup with expert data if available
+    const popupEl = document.createElement("div");
+    popupEl.innerHTML = buildHotspotPopupHtml(row);
+
+    const popup = new maplibregl.Popup({ offset: 14, closeButton: true, maxWidth: "340px" })
+      .setDOMContent(popupEl);
+
+    const m = createLetterMarker(lat, lng, "H", "#f39c12", "", row);
+    // Replace the simple HTML popup with our rich DOM popup
+    m.setPopup(popup);
+
     if (layerVisible.hotspots && passesNMMFilter(row)) m.addTo(map);
     hotspotMarkers.push(m);
   });
   renderHotspotCoverage();
 }
 
+function buildHotspotPopupHtml(row) {
+  const hsName     = row.name || "Hotspot";
+  const hsNameNorm = hsName.trim().toLowerCase();
+
+  // Match expert rows by hotspot name
+  const expertRows = hoodExpertData.filter(r =>
+    r.hotspot_name && r.hotspot_name.trim().toLowerCase() === hsNameNorm
+  );
+
+  // Most recent date range
+  const sorted    = [...expertRows].sort((a, b) => String(b.date_range || "").localeCompare(String(a.date_range || "")));
+  const latest    = sorted[0];
+  const dateRange = latest?.date_range || "";
+
+  const expertBlock = latest ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin:8px 0">
+      <div style="background:#e8f4fd;border-radius:6px;padding:5px;text-align:center">
+        <div style="font-size:9px;color:#555;font-weight:600">Experts (150m)</div>
+        <div style="font-size:15px;font-weight:800;color:#2980b9">${parseFloat(latest.avg_daily_experts_hotspot_150m) || 0}</div>
+        <div style="font-size:8px;color:#888">avg/day</div>
+      </div>
+      <div style="background:#e8f8f0;border-radius:6px;padding:5px;text-align:center">
+        <div style="font-size:9px;color:#555;font-weight:600">Demand (150m)</div>
+        <div style="font-size:15px;font-weight:800;color:#27ae60">${parseFloat(latest.avg_daily_demand_hotspot_150m) || 0}</div>
+        <div style="font-size:8px;color:#888">avg/day</div>
+      </div>
+      <div style="background:#fdf0e8;border-radius:6px;padding:5px;text-align:center">
+        <div style="font-size:9px;color:#555;font-weight:600">Idle (150m)</div>
+        <div style="font-size:15px;font-weight:800;color:#e67e22">${parseFloat(latest.avg_daily_idle_min_per_expert_hotspot_150m) || 0}</div>
+        <div style="font-size:8px;color:#888">min/expert/day</div>
+      </div>
+    </div>
+    <div style="margin-top:4px;border-top:1px solid #eee;padding-top:5px">
+      <div style="font-size:10px;font-weight:700;color:#555;margin-bottom:3px">Hood-level (${escHtml(row.hood || row._nm || "-")})</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px">
+        <div style="background:#f4eafd;border-radius:6px;padding:4px;text-align:center">
+          <div style="font-size:9px;color:#555;font-weight:600">Experts</div>
+          <div style="font-size:13px;font-weight:800;color:#8e44ad">${parseFloat(latest.avg_daily_experts_hood) || 0}</div>
+        </div>
+        <div style="background:#e8f8f0;border-radius:6px;padding:4px;text-align:center">
+          <div style="font-size:9px;color:#555;font-weight:600">Demand</div>
+          <div style="font-size:13px;font-weight:800;color:#27ae60">${parseFloat(latest.avg_daily_demand_hood) || 0}</div>
+        </div>
+        <div style="background:#fdf0e8;border-radius:6px;padding:4px;text-align:center">
+          <div style="font-size:9px;color:#555;font-weight:600">Idle</div>
+          <div style="font-size:13px;font-weight:800;color:#e67e22">${parseFloat(latest.avg_daily_idle_min_per_expert_hood) || 0}</div>
+          <div style="font-size:8px;color:#888">min/exp/day</div>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:9px;color:#aaa;margin-top:4px;text-align:right">📅 ${escHtml(dateRange)}</div>`
+  : `<div style="font-size:11px;color:#aaa;margin:6px 0">No expert data linked</div>`;
+
+  return `
+    <div style="min-width:260px;max-width:320px;font-size:12px;line-height:1.5">
+      <div style="font-weight:700;font-size:13px;color:#e67e22;margin-bottom:2px">🔥 ${escHtml(hsName)}</div>
+      <div style="font-size:11px;color:#666;margin-bottom:4px">
+        Hood: <b>${escHtml(row.hood || "-")}</b> &nbsp;|&nbsp;
+        Cluster: <b>${escHtml(row.cluster || "-")}</b><br>
+        NM: <b>${escHtml(row._nm || "-")}</b> &nbsp;|&nbsp;
+        MM: <b>${escHtml(row._mm || "-")}</b>
+      </div>
+      ${expertBlock}
+    </div>`;
+}
 function renderDemand(data) {
   demandData = data;
   stampHoodInfo(data, "lat", "lng");
@@ -447,6 +530,168 @@ function renderCentroids(data) {
     if (layerVisible.centroids && passesNMMFilter(row)) m.addTo(map);
     centroidMarkers.push(m);
   });
+}
+
+// ============================================================
+// HOOD EXPERTS LAYER
+// ============================================================
+async function loadHoodExpertData() {
+  const url = CONFIG.API_URL + "?action=getHoodExperts&t=" + Date.now();
+  try {
+    const res  = await fetch(url, { credentials: "omit" });
+    const data = await res.json();
+    if (!Array.isArray(data) || data.error) {
+      console.warn("⚠️ Hood experts data not available or error:", data);
+      return;
+    }
+    hoodExpertData = data;
+    console.log(`✅ hoodExperts: ${data.length} rows`);
+    drawHoodExpertsLayer();
+  } catch (err) {
+    console.error("❌ Failed to load hood expert data:", err);
+  }
+}
+
+function getHoodExpertInfo(hoodId) {
+  // Returns array of rows for this hood_id (may span multiple date ranges / hotspots)
+  return hoodExpertData.filter(r => String(r.hood_id) === String(hoodId));
+}
+
+function buildHoodExpertPopupHtml(hoodId, hoodName) {
+  const rows = getHoodExpertInfo(hoodId);
+  if (!rows.length) {
+    return `<div style="min-width:220px"><b>📊 ${escHtml(hoodName || hoodId)}</b><br><span style="color:#aaa;font-size:12px">No expert data available</span></div>`;
+  }
+
+  // Use most recent date range
+  const sorted = [...rows].sort((a, b) => String(b.date_range || "").localeCompare(String(a.date_range || "")));
+  const dateRange = sorted[0]?.date_range || "";
+  const hoodRows  = sorted.filter(r => r.date_range === dateRange);
+  const hoodRef   = hoodRows[0] || {};
+
+  const avgExpHood      = parseFloat(hoodRef.avg_daily_experts_hood)               || 0;
+  const avgDemHood      = parseFloat(hoodRef.avg_daily_demand_hood)                || 0;
+  const avgIdleMinHood  = parseFloat(hoodRef.avg_daily_idle_min_per_expert_hood)   || 0;
+
+  // Hotspot sub-rows (rows that have a hotspot_name)
+  const hotspotRows = hoodRows.filter(r => r.hotspot_name && r.hotspot_name.trim());
+
+  const hotspotHtml = hotspotRows.length ? `
+    <div style="margin-top:8px;border-top:1px solid #eee;padding-top:6px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">🔥 Hotspots in Hood</div>
+      ${hotspotRows.map(r => `
+        <div style="background:#f9f9f9;border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px">
+          <div style="font-weight:600;color:#e67e22">📍 ${escHtml(r.hotspot_name)}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;margin-top:3px;color:#555">
+            <span>Experts (150m):<br><b>${parseFloat(r.avg_daily_experts_hotspot_150m) || 0}</b></span>
+            <span>Demand (150m):<br><b>${parseFloat(r.avg_daily_demand_hotspot_150m) || 0}</b></span>
+            <span>Idle min/expert:<br><b>${parseFloat(r.avg_daily_idle_min_per_expert_hotspot_150m) || 0}</b></span>
+          </div>
+        </div>`).join("")}
+    </div>` : "";
+
+  return `
+    <div style="min-width:260px;max-width:320px;font-size:12px;line-height:1.6">
+      <div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#2c3e50">📊 ${escHtml(hoodName || hoodId)}</div>
+      <div style="font-size:10px;color:#888;margin-bottom:6px">📅 ${escHtml(dateRange)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:4px">
+        <div style="background:#e8f4fd;border-radius:6px;padding:6px;text-align:center">
+          <div style="font-size:10px;color:#555;font-weight:600">Experts</div>
+          <div style="font-size:16px;font-weight:800;color:#2980b9">${avgExpHood}</div>
+          <div style="font-size:9px;color:#888">avg/day</div>
+        </div>
+        <div style="background:#e8f8f0;border-radius:6px;padding:6px;text-align:center">
+          <div style="font-size:10px;color:#555;font-weight:600">Demand</div>
+          <div style="font-size:16px;font-weight:800;color:#27ae60">${avgDemHood}</div>
+          <div style="font-size:9px;color:#888">avg/day</div>
+        </div>
+        <div style="background:#fdf0e8;border-radius:6px;padding:6px;text-align:center">
+          <div style="font-size:10px;color:#555;font-weight:600">Idle</div>
+          <div style="font-size:16px;font-weight:800;color:#e67e22">${avgIdleMinHood}</div>
+          <div style="font-size:9px;color:#888">min/expert/day</div>
+        </div>
+      </div>
+      ${hotspotHtml}
+    </div>`;
+}
+
+function drawHoodExpertsLayer() {
+  // Colour hoods by expert count using a choropleth fill
+  if (!hoods.length) return;
+
+  // Build a lookup: hood_id → avg_daily_experts_hood (latest date range)
+  const expertByHood = {};
+  hoodExpertData.forEach(r => {
+    const id = String(r.hood_id);
+    if (!expertByHood[id] || String(r.date_range) > String(expertByHood[id].date_range)) {
+      expertByHood[id] = r;
+    }
+  });
+
+  // Inject expert count into hood features as a property
+  const features = hoods
+    .filter(h => h.geometry)
+    .map(h => {
+      const exp = expertByHood[String(h.hood_id)];
+      return {
+        type: "Feature",
+        geometry: h.geometry,
+        properties: {
+          hood_id:      h.hood_id     || "",
+          nano_market:  h.nano_market || "",
+          micro_market: h.micro_market || "",
+          region:       h.region      || "",
+          experts:      exp ? (parseFloat(exp.avg_daily_experts_hood) || 0) : 0,
+        }
+      };
+    });
+
+  const geojson = { type: "FeatureCollection", features };
+
+  if (map.getSource(HOOD_EXPERTS_SOURCE)) {
+    map.getSource(HOOD_EXPERTS_SOURCE).setData(geojson);
+  } else {
+    map.addSource(HOOD_EXPERTS_SOURCE, { type: "geojson", data: geojson });
+    map.addLayer({
+      id:     HOOD_EXPERTS_FILL,
+      type:   "fill",
+      source: HOOD_EXPERTS_SOURCE,
+      layout: { visibility: layerVisible.hoodExperts ? "visible" : "none" },
+      paint:  {
+        "fill-color": [
+          "interpolate", ["linear"], ["get", "experts"],
+          0,  "#f0f0ff",
+          5,  "#b3c6ff",
+          10, "#6699ff",
+          20, "#2255cc",
+          40, "#001f7a"
+        ],
+        "fill-opacity": 0.65
+      }
+    });
+
+    // Hood experts click popup
+    map.on("click", HOOD_EXPERTS_FILL, function (e) {
+      const props   = e.features[0]?.properties || {};
+      const hoodId  = props.hood_id;
+      const hoodName = props.nano_market;
+      const popupEl = document.createElement("div");
+      popupEl.innerHTML = buildHoodExpertPopupHtml(hoodId, hoodName);
+      new maplibregl.Popup({ closeButton: true, maxWidth: "340px" })
+        .setLngLat(e.lngLat)
+        .setDOMContent(popupEl)
+        .addTo(map);
+    });
+    map.on("mouseenter", HOOD_EXPERTS_FILL, () => map.getCanvas().style.cursor = "pointer");
+    map.on("mouseleave", HOOD_EXPERTS_FILL, () => map.getCanvas().style.cursor = "");
+  }
+
+  updateHoodExpertsVisibility();
+}
+
+function updateHoodExpertsVisibility() {
+  if (!map.getLayer(HOOD_EXPERTS_FILL)) return;
+  map.setLayoutProperty(HOOD_EXPERTS_FILL, "visibility", layerVisible.hoodExperts ? "visible" : "none");
 }
 
 function toGeoJSON(data, valueKey, latKey, lngKey) {
@@ -801,18 +1046,18 @@ function getFilteredData() {
 }
 
 function getFilteredNMs() {
-  const nmList = activeFilters.NM || [];
-  const mmList = activeFilters.MM || [];
-  if (nmList.length) return nmList;
-  if (mmList.length) return [...new Set(hoods.filter(h => mmList.includes(h.micro_market)).map(h => h.nano_market).filter(Boolean))];
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  if (filterNM) return [filterNM];
+  if (filterMM) return [...new Set(hoods.filter(h => h.micro_market === filterMM).map(h => h.nano_market).filter(Boolean))];
   return [...new Set(hoods.map(h => h.nano_market).filter(Boolean))];
 }
 
 function getFilteredMMs() {
-  const nmList = activeFilters.NM || [];
-  const mmList = activeFilters.MM || [];
-  if (mmList.length) return mmList;
-  if (nmList.length) return [...new Set(hoods.filter(h => nmList.includes(h.nano_market)).map(h => h.micro_market).filter(Boolean))];
+  const filterNM = activeFilters.NM || "";
+  const filterMM = activeFilters.MM || "";
+  if (filterMM) return [filterMM];
+  if (filterNM) return [...new Set(hoods.filter(h => h.nano_market === filterNM).map(h => h.micro_market).filter(Boolean))];
   return [...new Set(hoods.map(h => h.micro_market).filter(Boolean))];
 }
 
@@ -867,20 +1112,44 @@ function downloadBlob(content,filename,mimeType){
   URL.revokeObjectURL(url);
 }
 
-function downloadLayerKML(type){
-  const filteredData=getFilteredData();
-  const label=(activeFilters.NM||[]).join("_")||(activeFilters.MM||[]).join("_")||"filtered";
-  if(type==="nm"){const hoodList=hoodsByNM(getFilteredNMs());if(!hoodList.length){alert("No NM hoods found.");return;}downloadBlob(hoodsToKml(hoodList,`NM Layer — ${label}`,"7f0000ff"),`nm_layer_${label}.kml`,"application/vnd.google-earth.kml+xml");}
-  else if(type==="mm"){const hoodList=hoodsByMM(getFilteredMMs());if(!hoodList.length){alert("No MM hoods found.");return;}downloadBlob(hoodsToKml(hoodList,`MM Layer — ${label}`,"7fff0000"),`mm_layer_${label}.kml`,"application/vnd.google-earth.kml+xml");}
-  else if(type==="points"){if(!filteredData.length){alert("No data points.");return;}downloadBlob(pointsToKml(filteredData,`Data Points — ${label}`),`points_${label}.kml`,"application/vnd.google-earth.kml+xml");}
+function downloadLayerKML(type) {
+  const filteredData = getFilteredData();
+  const nmVal = activeFilters.NM || "";
+  const mmVal = activeFilters.MM || "";
+  const label = nmVal || mmVal || "filtered";
+
+  if (type === "nm") {
+    const hoodList = hoodsByNM(getFilteredNMs());
+    if (!hoodList.length) { alert("No NM hoods found."); return; }
+    downloadBlob(hoodsToKml(hoodList, `NM Layer — ${label}`, "7f0000ff"), `nm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+  } else if (type === "mm") {
+    const hoodList = hoodsByMM(getFilteredMMs());
+    if (!hoodList.length) { alert("No MM hoods found."); return; }
+    downloadBlob(hoodsToKml(hoodList, `MM Layer — ${label}`, "7fff0000"), `mm_layer_${label}.kml`, "application/vnd.google-earth.kml+xml");
+  } else if (type === "points") {
+    if (!filteredData.length) { alert("No data points."); return; }
+    downloadBlob(pointsToKml(filteredData, `Data Points — ${label}`), `points_${label}.kml`, "application/vnd.google-earth.kml+xml");
+  }
 }
 
-function downloadLayerCSV(type){
-  const filteredData=getFilteredData();
-  const label=(activeFilters.NM||[]).join("_")||(activeFilters.MM||[]).join("_")||"filtered";
-  if(type==="nm"){const hoodList=hoodsByNM(getFilteredNMs());if(!hoodList.length){alert("No NM hoods found.");return;}downloadBlob(hoodsToCsvWkt(hoodList,"nano_market"),`nm_layer_${label}.csv`,"text/csv");}
-  else if(type==="mm"){const hoodList=hoodsByMM(getFilteredMMs());if(!hoodList.length){alert("No MM hoods found.");return;}downloadBlob(hoodsToCsvWkt(hoodList,"micro_market"),`mm_layer_${label}.csv`,"text/csv");}
-  else if(type==="points"){if(!filteredData.length){alert("No data points.");return;}downloadBlob(pointsToCsvWkt(filteredData),`points_${label}.csv`,"text/csv");}
+function downloadLayerCSV(type) {
+  const filteredData = getFilteredData();
+  const nmVal = activeFilters.NM || "";
+  const mmVal = activeFilters.MM || "";
+  const label = nmVal || mmVal || "filtered";
+
+  if (type === "nm") {
+    const hoodList = hoodsByNM(getFilteredNMs());
+    if (!hoodList.length) { alert("No NM hoods found."); return; }
+    downloadBlob(hoodsToCsvWkt(hoodList, "nano_market"), `nm_layer_${label}.csv`, "text/csv");
+  } else if (type === "mm") {
+    const hoodList = hoodsByMM(getFilteredMMs());
+    if (!hoodList.length) { alert("No MM hoods found."); return; }
+    downloadBlob(hoodsToCsvWkt(hoodList, "micro_market"), `mm_layer_${label}.csv`, "text/csv");
+  } else if (type === "points") {
+    if (!filteredData.length) { alert("No data points."); return; }
+    downloadBlob(pointsToCsvWkt(filteredData), `points_${label}.csv`, "text/csv");
+  }
 }
 
 function extraLayerToCsvWkt(rows,latKey,lngKey,extraCols){
