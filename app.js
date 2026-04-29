@@ -1898,9 +1898,9 @@ function fuzzyScore(str,query){
 function fuzzyMatch(str,query){return fuzzyScore(str,query)>=0.5;}
 
 const BANGALORE_REGION_MMS = {
-  "Mid Belt":["Bellandur","Brookefield","Hoodi","Kudlu","Mahadevapura","Marathahalli","Munnekollal","Sarjapur","Whitefield 1","Whitefield 2","Whitefield 3","HSR","Indiranagar","Koramangala","Varthur"],
-  "South":["Hongasandra","Hulimavu","Nagasandra","Singasandra","Tejaswini Nagar","Rayasandra","Electronic City 1","Electronic City 2"],
-  "North":["Hebbal","Thannisandra","Yelahanka","Yeswanthpur","Segehalli"]
+  "Mid Belt":["bellandur","brookefield","hoodi","kudlu","mahadevapura","marathahalli","munnekollal","sarjapur","whitefield 1","whitefield 2","whitefield 3","hsr","indiranagar","koramangala","varthur"],
+  "South":["hongasandra","hulimavu","nagasandra","singasandra","tejaswini nagar","rayasandra","electronic city 1","electronic city 2"],
+  "North":["hebbal","thannisandra","yelahanka","yeswanthpur","segehalli"]
 };
 
 function buildRegionMaps() {
@@ -2009,103 +2009,246 @@ function renderNmMmSummary() {
   let activeData = allData.filter(r => (r["App status"]||"").trim()==="Active");
   if (propFilter) activeData = activeData.filter(r=>(r["Property"]||"")===propFilter);
 
+  // Build NM->MM lookup from hoods
+  const nmToMM = {};
+  hoods.forEach(h => {
+    if (h.nano_market && h.micro_market) nmToMM[h.nano_market] = h.micro_market;
+  });
+
   function buildGroupTable(groupKey, tableId) {
-    const hoodField = groupKey==="NM"?"nano_market":"micro_market";
-    const groups = [...new Set(hoods.map(h=>h[hoodField]).filter(Boolean))].sort();
+    const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
+    const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
     if (!groups.length) return `<p style="color:#aaa;font-size:12px">No hood data.</p>`;
+
     const ss = getSortState(tableId);
+
+    // Build per-group data
     const tableData = groups.map(g => {
-      const gRows = activeData.filter(r=>r[groupKey]===g);
+      const gRows = activeData.filter(r => r[groupKey] === g);
       const cats = {};
-      FIXED_CATEGORIES.forEach(c=>{cats[c]=gRows.filter(r=>normalizeCategory(r.Category)===c).length;});
-      return { group: g, total: gRows.length, ...cats };
+      FIXED_CATEGORIES.forEach(c => { cats[c] = 0; });
+
+      gRows.forEach(r => {
+        const normalized = normalizeCategory(r.Category);
+        if (FIXED_CATEGORIES.includes(normalized)) {
+          cats[normalized] = (cats[normalized] || 0) + 1;
+        } else {
+          cats["Other"] = (cats["Other"] || 0) + 1;
+        }
+      });
+
+      const total = FIXED_CATEGORIES.reduce((sum, c) => sum + (cats[c] || 0), 0);
+      const mm = groupKey === "NM" ? (nmToMM[g] || "") : "";
+      return { group: g, mm, total, ...cats };
     });
-    const cols = [groupKey, "Total Active", ...FIXED_CATEGORIES];
-    const sortedData = ss.col ? sortData(tableData.map((d,i)=>({...d, _orig:i})), {col: ss.col==="Total Active"?"total":ss.col==="NM"||ss.col==="MM"?"group":ss.col, dir:ss.dir}) : tableData;
-    const rows = sortedData.map((d, idx) => `<tr><td class="rn-cell">${idx+1}</td><td>${escHtml(d.group)}</td><td style="font-weight:700">${d.total}</td>${FIXED_CATEGORIES.map(c=>`<td>${d[c]||0}</td>`).join("")}</tr>`).join("");
+
+    // Unmatched rows: props whose NM/MM doesn't exist in hoods at all
+    const knownGroups = new Set(groups);
+    const unmatchedRows = activeData.filter(r => {
+      const val = (r[groupKey] || "").trim();
+      return !val || !knownGroups.has(val);
+    });
+
+    let unmatchedEntry = null;
+    if (unmatchedRows.length > 0) {
+      const cats = {};
+      FIXED_CATEGORIES.forEach(c => { cats[c] = 0; });
+      unmatchedRows.forEach(r => {
+        const normalized = normalizeCategory(r.Category);
+        if (FIXED_CATEGORIES.includes(normalized)) {
+          cats[normalized] = (cats[normalized] || 0) + 1;
+        } else {
+          cats["Other"] = (cats["Other"] || 0) + 1;
+        }
+      });
+      const total = FIXED_CATEGORIES.reduce((sum, c) => sum + (cats[c] || 0), 0);
+      unmatchedEntry = { group: "⚠️ Unmatched / No Hood", mm: "—", total, ...cats };
+    }
+
+    // Grand total row across all groups including unmatched
+    const allEntries = unmatchedEntry ? [...tableData, unmatchedEntry] : tableData;
+    const grandCats = {};
+    FIXED_CATEGORIES.forEach(c => {
+      grandCats[c] = allEntries.reduce((s, d) => s + (d[c] || 0), 0);
+    });
+    const grandTotal = FIXED_CATEGORIES.reduce((sum, c) => sum + (grandCats[c] || 0), 0);
+
+    const sortedData = ss.col
+      ? sortData(
+          tableData.map((d, i) => ({ ...d, _orig: i })),
+          {
+            col: ss.col === "Total Active" ? "total"
+               : (ss.col === "NM" || ss.col === "MM" || ss.col === "group") ? "group"
+               : ss.col,
+            dir: ss.dir
+          }
+        )
+      : tableData;
+
+    const displayData = unmatchedEntry ? [...sortedData, unmatchedEntry] : sortedData;
+
+    const mmHeader = groupKey === "NM" ? `<th>MM</th>` : "";
+    const mmFooterCell = groupKey === "NM" ? `<td></td>` : "";
+
+    const rows = displayData.map((d, idx) => {
+      const isUnmatched = d.group === "⚠️ Unmatched / No Hood";
+      const rowStyle = isUnmatched ? `style="background:#fff8e1;color:#e65100"` : "";
+      const mmCell = groupKey === "NM"
+        ? `<td style="color:#888;font-size:11px">${escHtml(d.mm || "—")}</td>`
+        : "";
+      return `<tr ${rowStyle}>
+        <td class="rn-cell">${isUnmatched ? "⚠" : idx + 1}</td>
+        <td>${escHtml(d.group)}</td>
+        ${mmCell}
+        <td style="font-weight:700">${d.total}</td>
+        ${FIXED_CATEGORIES.map(c => `<td>${d[c] || 0}</td>`).join("")}
+      </tr>`;
+    }).join("");
+
+    const footerRow = `<tr style="background:#f0f4ff;font-weight:700;position:sticky;bottom:0">
+      <td class="rn-cell">Σ</td>
+      <td><b>Grand Total</b></td>
+      ${mmFooterCell}
+      <td style="font-weight:800;color:#1a3a7a">${grandTotal}</td>
+      ${FIXED_CATEGORIES.map(c => `<td style="color:#1a3a7a">${grandCats[c] || 0}</td>`).join("")}
+    </tr>`;
+
+    // Unmatched property cards with name + current NM/MM value
+    const unmatchedListHtml = unmatchedEntry ? (() => {
+      const unmatchedNames = unmatchedRows.map(r => {
+        const name  = (r["Name of the property"] || "").trim() || "Unnamed";
+        const nmVal = (r["NM"] || "").trim() || "—";
+        const mmVal = (r["MM"] || "").trim() || "—";
+        return `<div style="display:flex;gap:8px;align-items:flex-start;padding:5px 8px;background:#fff8e1;border-radius:6px;margin-bottom:4px">
+          <span style="font-size:13px">⚠️</span>
+          <div>
+            <div style="font-weight:600;font-size:12px;color:#333">${escHtml(name)}</div>
+            <div style="font-size:11px;color:#888">NM: <b>${escHtml(nmVal)}</b> &nbsp;|&nbsp; MM: <b>${escHtml(mmVal)}</b></div>
+          </div>
+        </div>`;
+      }).join("");
+
+      return `<div style="background:#fff3e0;border:1px solid #ffcc02;border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
+        <div style="font-weight:700;color:#e65100;margin-bottom:8px">
+          ⚠️ ${unmatchedEntry.total} propert${unmatchedEntry.total === 1 ? "y" : "ies"} not matched to any hood — showing their current NM/MM values:
+        </div>
+        <div style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+          ${unmatchedNames}
+        </div>
+      </div>`;
+    })() : "";
+
     const sortBarId = `${tableId}_sortbar`;
+
     return `
       <div id="${sortBarId}"></div>
       <div class="nm-table-wrap" id="${tableId}_wrap">
         <div style="overflow-x:auto;max-height:400px;overflow-y:auto" id="${tableId}_scroll">
           <table class="summary-table" id="${tableId}" style="min-width:700px">
-            <thead><tr><th class="rn-cell">#</th><th>${groupKey}</th><th>Total Active</th>${FIXED_CATEGORIES.map(c=>`<th>${escHtml(c)}</th>`).join("")}</tr></thead>
+            <thead><tr>
+              <th class="rn-cell">#</th>
+              <th>${groupKey}</th>
+              ${mmHeader}
+              <th>Total Active</th>
+              ${FIXED_CATEGORIES.map(c => `<th>${escHtml(c)}</th>`).join("")}
+            </tr></thead>
             <tbody>${rows}</tbody>
+            <tfoot>${footerRow}</tfoot>
           </table>
         </div>
       </div>
+      ${unmatchedListHtml}
       <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
         <button class="summary-dl-btn" onclick="downloadSummaryTable('${tableId}','active_by_${groupKey.toLowerCase()}')">⬇ CSV</button>
-        <button class="nm-fullscreen-btn" onclick="openNmMmFullscreen('${tableId}','${groupKey} Level — Active Properties by Category${propFilter?" ("+propFilter+")":""}')">⛶ Fullscreen</button>
+        <button class="nm-fullscreen-btn" onclick="openNmMmFullscreen('${tableId}','${groupKey} Level — Active Properties by Category${propFilter ? " (" + propFilter + ")" : ""}')">⛶ Fullscreen</button>
       </div>`;
   }
 
-  const WASHROOM_TYPES=["Resting + Washroom","Washroom"];
-  const RESTING_TYPES=["Resting + Washroom","Resting"];
+  const WASHROOM_TYPES = ["Resting + Washroom","Washroom"];
+  const RESTING_TYPES  = ["Resting + Washroom","Resting"];
 
   function buildWrStats(groupKey, label) {
-    const hoodField=groupKey==="NM"?"nano_market":"micro_market";
-    const groups=[...new Set(hoods.map(h=>h[hoodField]).filter(Boolean))].sort();
-    const total=groups.length;
-    if(!total)return{statsHtml:`<p style="color:#aaa;font-size:12px">No data.</p>`,groups:[]};
-    const withWashroom=groups.filter(g=>activeData.some(r=>r[groupKey]===g&&WASHROOM_TYPES.includes(r["Closure type"]||"")));
-    const withResting=groups.filter(g=>activeData.some(r=>r[groupKey]===g&&RESTING_TYPES.includes(r["Closure type"]||"")));
-    const withBoth=groups.filter(g=>withWashroom.includes(g)&&withResting.includes(g));
-    const noWashroom=groups.filter(g=>!withWashroom.includes(g));
-    const noResting=groups.filter(g=>!withResting.includes(g));
-    const withNeither=groups.filter(g=>!withWashroom.includes(g)&&!withResting.includes(g));
-    const pct=(n)=>total?`(${(n/total*100).toFixed(1)}%)`:"(0%)";
-    const cardHtml=(title,count,pctStr,borderColor,bgColor,kind,gKey)=>`<div class="wr-card" onclick="showWrHighlight('${kind}','${gKey}',this)" style="border-left:4px solid ${borderColor};background:${bgColor}"><div class="wr-card-title">${escHtml(title)}</div><div class="wr-card-value">${count} <span class="wr-card-pct">${pctStr}</span></div><div class="wr-card-label">of ${total} total ${label}s</div></div>`;
-    const statsHtml=`
+    const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
+    const groups = [...new Set(hoods.map(h => h[hoodField]).filter(Boolean))].sort();
+    const total = groups.length;
+    if (!total) return { statsHtml: `<p style="color:#aaa;font-size:12px">No data.</p>`, groups: [] };
+
+    const withWashroom = groups.filter(g => activeData.some(r => r[groupKey] === g && WASHROOM_TYPES.includes(r["Closure type"] || "")));
+    const withResting  = groups.filter(g => activeData.some(r => r[groupKey] === g && RESTING_TYPES.includes(r["Closure type"] || "")));
+    const withBoth     = groups.filter(g => withWashroom.includes(g) && withResting.includes(g));
+    const noWashroom   = groups.filter(g => !withWashroom.includes(g));
+    const noResting    = groups.filter(g => !withResting.includes(g));
+    const withNeither  = groups.filter(g => !withWashroom.includes(g) && !withResting.includes(g));
+
+    const pct = (n) => total ? `(${(n / total * 100).toFixed(1)}%)` : "(0%)";
+    const cardHtml = (title, count, pctStr, borderColor, bgColor, kind, gKey) =>
+      `<div class="wr-card" onclick="showWrHighlight('${kind}','${gKey}',this)" style="border-left:4px solid ${borderColor};background:${bgColor}">
+        <div class="wr-card-title">${escHtml(title)}</div>
+        <div class="wr-card-value">${count} <span class="wr-card-pct">${pctStr}</span></div>
+        <div class="wr-card-label">of ${total} total ${label}s</div>
+      </div>`;
+
+    const statsHtml = `
       <div class="washroom-resting-grid">
-        ${cardHtml(`${label}s with Washroom`,withWashroom.length,pct(withWashroom.length),"#2196f3","#f0f8ff","withWashroom",groupKey)}
-        ${cardHtml(`${label}s with Resting`,withResting.length,pct(withResting.length),"#4caf50","#f0fff4","withResting",groupKey)}
-        ${cardHtml(`${label}s with Washroom & Resting`,withBoth.length,pct(withBoth.length),"#9c27b0","#faf0ff","withBoth",groupKey)}
+        ${cardHtml(`${label}s with Washroom`,           withWashroom.length, pct(withWashroom.length), "#2196f3", "#f0f8ff", "withWashroom", groupKey)}
+        ${cardHtml(`${label}s with Resting`,            withResting.length,  pct(withResting.length),  "#4caf50", "#f0fff4", "withResting",  groupKey)}
+        ${cardHtml(`${label}s with Washroom & Resting`, withBoth.length,     pct(withBoth.length),     "#9c27b0", "#faf0ff", "withBoth",     groupKey)}
       </div>
       <hr class="wr-divider"/>
       <div class="washroom-resting-grid">
-        ${cardHtml(`${label}s without Washroom`,noWashroom.length,pct(noWashroom.length),"#e53935","#fff5f5","noWashroom",groupKey)}
-        ${cardHtml(`${label}s without Resting`,noResting.length,pct(noResting.length),"#ff9800","#fffbf0","noResting",groupKey)}
-        ${cardHtml(`${label}s without Washroom & Resting`,withNeither.length,pct(withNeither.length),"#546e7a","#f4f6f7","withNeither",groupKey)}
+        ${cardHtml(`${label}s without Washroom`,                noWashroom.length,  pct(noWashroom.length),  "#e53935", "#fff5f5", "noWashroom",  groupKey)}
+        ${cardHtml(`${label}s without Resting`,                 noResting.length,   pct(noResting.length),   "#ff9800", "#fffbf0", "noResting",   groupKey)}
+        ${cardHtml(`${label}s without Washroom & Resting`,      withNeither.length, pct(withNeither.length), "#546e7a", "#f4f6f7", "withNeither", groupKey)}
       </div>`;
-    return{statsHtml,withWashroom,withResting,withBoth,noWashroom,noResting,withNeither,total,groups};
+
+    return { statsHtml, withWashroom, withResting, withBoth, noWashroom, noResting, withNeither, total, groups };
   }
 
-  const nmStats=buildWrStats("NM","NM");
-  const mmStats=buildWrStats("MM","MM");
-  const totalNMs=[...new Set(hoods.map(h=>h.nano_market).filter(Boolean))].length;
-  const totalMMs=[...new Set(hoods.map(h=>h.micro_market).filter(Boolean))].length;
+  const nmStats  = buildWrStats("NM", "NM");
+  const mmStats  = buildWrStats("MM", "MM");
+  const totalNMs = [...new Set(hoods.map(h => h.nano_market).filter(Boolean))].length;
+  const totalMMs = [...new Set(hoods.map(h => h.micro_market).filter(Boolean))].length;
 
   container.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
       <span style="font-size:12px;font-weight:600;color:#555">🔍 Filter by Property:</span>
       <select id="nmMmPropertyFilter" onchange="renderNmMmSummary()" style="padding:6px 10px;border-radius:8px;border:1px solid #ddd;font-size:13px;min-width:160px">
-        <option value="" ${!propFilter?"selected":""}>All Properties</option>
-        <option value="Public"  ${propFilter==="Public"?"selected":""}>Public</option>
-        <option value="Private" ${propFilter==="Private"?"selected":""}>Private</option>
+        <option value="" ${!propFilter ? "selected" : ""}>All Properties</option>
+        <option value="Public"  ${propFilter === "Public"  ? "selected" : ""}>Public</option>
+        <option value="Private" ${propFilter === "Private" ? "selected" : ""}>Private</option>
       </select>
-      ${propFilter?`<span style="background:#e8f0fe;color:#3b5bdb;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600">Showing: ${propFilter}</span>`:""}
+      ${propFilter ? `<span style="background:#e8f0fe;color:#3b5bdb;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600">Showing: ${propFilter}</span>` : ""}
     </div>
     <div class="nm-mm-grid" style="margin-bottom:24px">
-      <div class="nm-mm-panel"><h4>NM Level — Active Properties by Category</h4>${buildGroupTable("NM","nmActiveTable")}</div>
-      <div class="nm-mm-panel"><h4>MM Level — Active Properties by Category</h4>${buildGroupTable("MM","mmActiveTable")}</div>
+      <div class="nm-mm-panel"><h4>NM Level — Active Properties by Category</h4>${buildGroupTable("NM", "nmActiveTable")}</div>
+      <div class="nm-mm-panel"><h4>MM Level — Active Properties by Category</h4>${buildGroupTable("MM", "mmActiveTable")}</div>
     </div>
     <div class="nm-mm-grid">
-      <div class="nm-mm-panel"><h4>NM Washroom &amp; Resting Coverage</h4><div style="font-size:11px;color:#888;margin-bottom:10px">Total NMs (from hoods): <b>${totalNMs}</b></div>${nmStats.statsHtml}</div>
-      <div class="nm-mm-panel"><h4>MM Washroom &amp; Resting Coverage</h4><div style="font-size:11px;color:#888;margin-bottom:10px">Total MMs (from hoods): <b>${totalMMs}</b></div>${mmStats.statsHtml}</div>
+      <div class="nm-mm-panel">
+        <h4>NM Washroom &amp; Resting Coverage</h4>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total NMs (from hoods): <b>${totalNMs}</b></div>
+        ${nmStats.statsHtml}
+      </div>
+      <div class="nm-mm-panel">
+        <h4>MM Washroom &amp; Resting Coverage</h4>
+        <div style="font-size:11px;color:#888;margin-bottom:10px">Total MMs (from hoods): <b>${totalMMs}</b></div>
+        ${mmStats.statsHtml}
+      </div>
     </div>
     <div id="wrHighlightCard" style="display:none;margin-top:16px" class="wr-highlight-list">
       <h5 id="wrHighlightTitle"></h5>
       <div id="wrHighlightItems"></div>
     </div>`;
 
-  window._wrStatsNM=nmStats;
-  window._wrStatsMM=mmStats;
+  window._wrStatsNM = nmStats;
+  window._wrStatsMM = mmStats;
 
-  ["nmActiveTable","mmActiveTable"].forEach(tableId => {
+  ["nmActiveTable", "mmActiveTable"].forEach(tableId => {
     const sortBarId = `${tableId}_sortbar`;
-    const groupKey = tableId === "nmActiveTable" ? "NM" : "MM";
-    const cols = [groupKey, "Total Active", ...FIXED_CATEGORIES];
+    const groupKey  = tableId === "nmActiveTable" ? "NM" : "MM";
+    const cols = groupKey === "NM"
+      ? [groupKey, "MM", "Total Active", ...FIXED_CATEGORIES]
+      : [groupKey, "Total Active", ...FIXED_CATEGORIES];
     const ss = getSortState(tableId);
     renderSortBar(sortBarId, cols, ss, (col, dir) => {
       setSortState(tableId, col, dir);
