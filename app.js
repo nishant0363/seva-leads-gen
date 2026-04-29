@@ -1928,74 +1928,112 @@ function renderBangaloreOverview() {
   if(containerPublic)containerPublic.innerHTML=buildBangaloreOverviewHTML("Public",regionMaps);
 }
 
-function buildBangaloreOverviewHTML(propertyType,regionMaps){
-  // FIX: no name-based deduplication — use raw active rows directly
-  const activeData=allData.filter(r=>(r["App status"]||"").trim()==="Active");
-  const publicActive=activeData.filter(r=>(r["Property"]||"")==="Public");
-  const privateActive=activeData.filter(r=>(r["Property"]||"")==="Private");
+function buildBangaloreOverviewHTML(propertyType, regionMaps) {
+  const activeData = allData.filter(r => (r["App status"] || "").trim() === "Active");
+  const publicActive = activeData.filter(r => (r["Property"] || "") === "Public");
+  const privateActive = activeData.filter(r => (r["Property"] || "") === "Private");
 
-  const WASHROOM_TYPES=["Resting + Washroom","Washroom"];
-  const RESTING_TYPES=["Resting + Washroom","Resting"];
+  const WASHROOM_TYPES = ["Resting + Washroom", "Washroom"];
+  const RESTING_TYPES = ["Resting + Washroom", "Resting"];
 
-  const scopedActive=propertyType==="Private"?privateActive:propertyType==="Public"?publicActive:activeData;
+  const scopedActive = propertyType === "Private" ? privateActive : propertyType === "Public" ? publicActive : activeData;
+  const launchScopeActive = propertyType === "Private" ? privateActive : propertyType === "Public" ? publicActive : activeData;
 
-  // For launchedToday / launchedTotal — use scoped active rows directly
-  const launchScopeActive=propertyType==="Private"?privateActive:propertyType==="Public"?publicActive:activeData;
+  function nmsForMMs(mmList) { return [...new Set(hoods.filter(h => mmList.includes(h.micro_market)).map(h => h.nano_market).filter(Boolean))]; }
+  function nmHasActive(nm) { return scopedActive.some(r => r.NM === nm); }
+  function nmHasAllActive(nm) { return activeData.some(r => r.NM === nm); }
+  function nmHasWashroom(nm) { return scopedActive.some(r => r.NM === nm && WASHROOM_TYPES.includes(r["Closure type"] || "")); }
+  function nmHasResting(nm) { return scopedActive.some(r => r.NM === nm && RESTING_TYPES.includes(r["Closure type"] || "")); }
 
-  function nmsForMMs(mmList){return[...new Set(hoods.filter(h=>mmList.includes(h.micro_market)).map(h=>h.nano_market).filter(Boolean))];}
-  function nmHasActive(nm){return scopedActive.some(r=>r.NM===nm);}
-  function nmHasWashroom(nm){return scopedActive.some(r=>r.NM===nm&&WASHROOM_TYPES.includes(r["Closure type"]||""));}
-  function nmHasResting(nm){return scopedActive.some(r=>r.NM===nm&&RESTING_TYPES.includes(r["Closure type"]||""));}
+  const pct = (n, d) => d ? `${(n / d * 100).toFixed(1)}%` : "0%";
+  const fmt = (n, d) => `<b>${n}</b> <span style="color:#888;font-size:11px">(${pct(n, d)})</span>`;
 
-  const pct=(n,d)=>d?`${(n/d*100).toFixed(1)}%`:"0%";
-  const fmt=(n,d)=>`<b>${n}</b> <span style="color:#888;font-size:11px">(${pct(n,d)})</span>`;
+  function isToday(val) { if (!val) return false; const d = parseTimestamp(val); if (!d) return false; const now = new Date(); return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate(); }
 
-  function isToday(val){if(!val)return false;const d=parseTimestamp(val);if(!d)return false;const now=new Date();return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate();}
+  const launchedToday = launchScopeActive.filter(r => isToday(r["Launch date"])).length;
+  const launchedTotal = launchScopeActive.length;
 
-  const launchedToday=launchScopeActive.filter(r=>isToday(r["Launch date"])).length;
-  const launchedTotal=launchScopeActive.length;
+  const blrMMs = [...new Set([...regionMaps["Mid Belt"], ...regionMaps["North"], ...regionMaps["South"]])];
+  const blrNMs = nmsForMMs(blrMMs);
+  const blrTotal = blrNMs.length;
+  const blrWithActive = blrNMs.filter(nmHasActive);
+  const blrWithAllActive = blrNMs.filter(nmHasAllActive);
+  const blrWithWashroom = blrNMs.filter(nmHasWashroom);
+  const blrWithResting = blrNMs.filter(nmHasResting);
+  const blrWithBoth = blrNMs.filter(nm => nmHasWashroom(nm) && nmHasResting(nm));
 
-  const blrMMs=[...new Set([...regionMaps["Mid Belt"],...regionMaps["North"],...regionMaps["South"]])];
-  const blrNMs=nmsForMMs(blrMMs);
-  const blrTotal=blrNMs.length;
-  const blrWithActive=blrNMs.filter(nmHasActive);
-  const blrWithWashroom=blrNMs.filter(nmHasWashroom);
-  const blrWithResting=blrNMs.filter(nmHasResting);
-  const blrWithBoth=blrNMs.filter(nm=>nmHasWashroom(nm)&&nmHasResting(nm));
+  const coverageLabel = propertyType === "All" ? "All Active" : `${propertyType} Active`;
+  const isPublic = propertyType === "Public";
 
-  function regionRow(regionName){const mms=regionMaps[regionName]||[];const regionNMs=nmsForMMs(mms);const withActive=regionNMs.filter(nmHasActive);return`<tr><td style="font-weight:600;color:#34495e">${escHtml(regionName)} Bangalore</td><td style="text-align:center">${mms.length} MMs → <b>${regionNMs.length}</b> NMs</td><td style="text-align:center">${fmt(withActive.length,regionNMs.length)}</td></tr>`;}
+  function regionRow(regionName) {
+    const mms = regionMaps[regionName] || [];
+    const regionNMs = nmsForMMs(mms);
+    const withActive = regionNMs.filter(nmHasActive);
+    const withAllActive = regionNMs.filter(nmHasAllActive);
+    const extraCell = isPublic
+      ? `<td style="text-align:center">${fmt(withAllActive.length, regionNMs.length)}</td>`
+      : "";
+    return `<tr>
+      <td style="font-weight:600;color:#34495e">${escHtml(regionName)} Bangalore</td>
+      <td style="text-align:center">${mms.length} MMs → <b>${regionNMs.length}</b> NMs</td>
+      <td style="text-align:center">${fmt(withActive.length, regionNMs.length)}</td>
+      ${extraCell}
+    </tr>`;
+  }
 
-  const coverageLabel=propertyType==="All"?"All Active":`${propertyType} Active`;
-  const tile=(icon,label,value,sub,color="#2c3e50")=>`<div style="background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:14px 18px;border-left:4px solid ${color};min-width:160px;flex:1"><div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">${icon} ${escHtml(label)}</div><div style="font-size:22px;font-weight:800;color:${color}">${value}</div>${sub?`<div style="font-size:11px;color:#999;margin-top:3px">${sub}</div>`:""}</div>`;
-  const sourceNote=`<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">fuzzy MM match</span>`;
+  const tile = (icon, label, value, sub, color = "#2c3e50") =>
+    `<div style="background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:14px 18px;border-left:4px solid ${color};min-width:160px;flex:1">
+      <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px">${icon} ${escHtml(label)}</div>
+      <div style="font-size:22px;font-weight:800;color:${color}">${value}</div>
+      ${sub ? `<div style="font-size:11px;color:#999;margin-top:3px">${sub}</div>` : ""}
+    </div>`;
 
-  return`
+  const sourceNote = `<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">fuzzy MM match</span>`;
+
+  // Extra header + BLR row cell for Public only
+  const extraHeader = isPublic
+    ? `<th>${escHtml("NMs with All Active Property")}</th>`
+    : "";
+  const extraBlrCell = isPublic
+    ? `<td style="text-align:center">${fmt(blrWithAllActive.length, blrTotal)}</td>`
+    : "";
+
+  return `
     <div style="margin-bottom:20px">
       <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">📍 NM Coverage — ${coverageLabel} Properties ${sourceNote}</div>
-      <div style="overflow-x:auto"><table class="summary-table" style="max-width:620px">
-        <thead><tr><th style="text-align:left">Region</th><th>MMs / NMs</th><th>${escHtml(`NMs with ${coverageLabel} Property`)}</th></tr></thead>
+      <div style="overflow-x:auto"><table class="summary-table" style="max-width:${isPublic ? "780px" : "620px"}">
+        <thead><tr>
+          <th style="text-align:left">Region</th>
+          <th>MMs / NMs</th>
+          <th>${escHtml(`NMs with ${coverageLabel} Property`)}</th>
+          ${extraHeader}
+        </tr></thead>
         <tbody>
-          <tr style="background:#f0f4ff"><td style="font-weight:700;color:#1a237e">🏙️ Bangalore (all)</td><td style="text-align:center">${blrMMs.length} MMs → <b>${blrTotal}</b> NMs</td><td style="text-align:center">${fmt(blrWithActive.length,blrTotal)}</td></tr>
-          ${["Mid Belt","North","South"].map(r=>regionRow(r)).join("")}
+          <tr style="background:#f0f4ff">
+            <td style="font-weight:700;color:#1a237e">🏙️ Bangalore (all)</td>
+            <td style="text-align:center">${blrMMs.length} MMs → <b>${blrTotal}</b> NMs</td>
+            <td style="text-align:center">${fmt(blrWithActive.length, blrTotal)}</td>
+            ${extraBlrCell}
+          </tr>
+          ${["Mid Belt", "North", "South"].map(r => regionRow(r)).join("")}
         </tbody>
       </table></div>
     </div>
     <div style="margin-bottom:20px">
       <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">🚿 Bangalore NM — Closure Coverage · ${coverageLabel} · (${blrTotal} NMs)</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        ${tile("🚿","NMs with Washroom",`${blrWithWashroom.length} / ${blrTotal}`,pct(blrWithWashroom.length,blrTotal),"#2196f3")}
-        ${tile("🛋️","NMs with Resting",`${blrWithResting.length} / ${blrTotal}`,pct(blrWithResting.length,blrTotal),"#4caf50")}
-        ${tile("✅","NMs with Both",`${blrWithBoth.length} / ${blrTotal}`,pct(blrWithBoth.length,blrTotal),"#9c27b0")}
+        ${tile("🚿", "NMs with Washroom", `${blrWithWashroom.length} / ${blrTotal}`, pct(blrWithWashroom.length, blrTotal), "#2196f3")}
+        ${tile("🛋️", "NMs with Resting", `${blrWithResting.length} / ${blrTotal}`, pct(blrWithResting.length, blrTotal), "#4caf50")}
+        ${tile("✅", "NMs with Both", `${blrWithBoth.length} / ${blrTotal}`, pct(blrWithBoth.length, blrTotal), "#9c27b0")}
       </div>
     </div>
     <div style="margin-bottom:20px">
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        ${tile("📅","Launched Today",launchedToday,`${propertyType==="All"?"All":propertyType} · Launch date = today`,"#e67e22")}
-        ${tile("📦","Launched Total",launchedTotal,`${propertyType==="All"?"All":propertyType} · App Status = Active`,"#27ae60")}
+        ${tile("📅", "Launched Today", launchedToday, `${propertyType === "All" ? "All" : propertyType} · Launch date = today`, "#e67e22")}
+        ${tile("📦", "Launched Total", launchedTotal, `${propertyType === "All" ? "All" : propertyType} · App Status = Active`, "#27ae60")}
       </div>
     </div>`;
 }
-
 // ============================================================
 // NM / MM SUMMARY
 // ============================================================
