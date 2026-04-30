@@ -4,14 +4,13 @@
   <title>Seva Property Dashboard</title>
 
   <link rel="stylesheet" href="style.css"/>
-  <!-- MapLibre GL JS replaces Leaflet -->
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
   <style>
-    /* ── MapLibre popup override to match old Leaflet style ── */
+    /* ── MapLibre popup override ── */
     .maplibregl-popup-content {
       padding: 10px 14px;
       font-size: 13px;
@@ -26,7 +25,6 @@
       color: #888;
       padding: 2px 6px;
     }
-    /* Map canvas cursor override for add-point mode */
     .map-crosshair .maplibregl-canvas { cursor: crosshair !important; }
 
     /* ── Download buttons ── */
@@ -99,13 +97,6 @@
     .legend-label { flex: 1; color: #333; }
     .legend-eye { font-size: 12px; opacity: 0.6; }
 
-    /* ── Modal readonly fields ── */
-    .modal-field input[readonly] {
-      background: #f0f8f0;
-      color: #27ae60;
-      font-weight: 700;
-    }
-
     /* ── Sheet filter bar ── */
     .sheet-filter-bar {
       display: flex;
@@ -141,6 +132,7 @@
       border-radius: 6px;
       font-size: 13px;
     }
+
     /* ── Sheet preview header flex ── */
     .sheet-preview-header {
       display: flex;
@@ -160,6 +152,7 @@
       bottom: 0;
     }
     #sheetPreviewTable tfoot td:first-child { text-align: left; }
+
     .summary-dl-btn {
       font-size: 11px;
       padding: 4px 10px;
@@ -214,7 +207,7 @@
       border-bottom: 2px solid #e8e8e8; flex: 1;
     }
 
-    /* ── Detail panel dropdowns ── */
+    /* ── Detail panel ── */
     .detail-select {
       width: 100%;
       padding: 5px 8px;
@@ -222,43 +215,6 @@
       border-radius: 6px;
       font-size: 13px;
       background: #fff;
-    }
-    .detail-select:focus {
-      outline: none;
-      border-color: #3498db;
-      box-shadow: 0 0 0 2px rgba(52,152,219,0.15);
-    }
-    .summary-table-wrapper {
-      overflow-x: auto;
-    }
-    .summary-table {
-      border-collapse: collapse;
-      font-size: 12px;
-      min-width: 400px;
-      width: 100%;
-    }
-    .summary-table th {
-      background: #f0f4f8;
-      padding: 7px 10px;
-      text-align: center;
-      font-weight: 600;
-      color: #444;
-      border: 1px solid #e0e0e0;
-      white-space: nowrap;
-    }
-    .summary-table th:first-child { text-align: left; }
-    .summary-table td {
-      padding: 6px 10px;
-      text-align: center;
-      border: 1px solid #ebebeb;
-      color: #333;
-    }
-    .summary-table td:first-child { text-align: left; font-size: 11px; }
-    .summary-table tbody tr:nth-child(even) { background: #fafafa; }
-    .summary-table tbody tr:hover { background: #eef4ff; }
-    .summary-total-row td {
-      background: #f0f4f8 !important;
-      border-top: 2px solid #d0d0d0;
     }
   </style>
 </head>
@@ -272,14 +228,10 @@
       <h2>📍 Seva Property Map</h2>
     </div>
 
-    <!-- ACTION BUTTONS -->
+    <!-- ACTION BUTTONS — view/refresh only, no edit/save/fix operations -->
     <div class="container">
       <div class="actions centered">
         <button onclick="refreshData()">⟳ Refresh</button>
-        <button onclick="saveCurrent()">💾 Save</button>
-        <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
-        <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
-        <button id="btnAddPoint" class="primary" onclick="toggleAddPointMode()">➕ Add Point</button>
         <button id="btnMarkCircles" onclick="toggleMarkCirclesMode()">⭕ Mark Circle Points</button>
       </div>
     </div>
@@ -294,6 +246,9 @@
         <select id="filterFinalStatus"><option value="">Final Status</option></select>
         <select id="filterNM"><option value="">NM</option></select>
         <select id="filterMM"><option value="">MM</option></select>
+        <span id="filterRegionWrap">
+          <select id="filterRegion"><option value="">Region</option></select>
+        </span>
         <input type="date" id="filterDateFrom" onchange="applyFilters()" title="From date" />
         <input type="date" id="filterDateTo"   onchange="applyFilters()" title="To date" />
         <button class="primary" onclick="applyFilters()">Apply</button>
@@ -344,7 +299,7 @@
       </div>
     </div>
 
-    <!-- DETAILS -->
+    <!-- DETAILS — view only -->
     <div class="container">
       <div class="details-card">
         <h3>Details</h3>
@@ -369,6 +324,9 @@
           <select id="sfFinalStatus"><option value="">Final Status</option></select>
           <select id="sfNM"><option value="">NM</option></select>
           <select id="sfMM"><option value="">MM</option></select>
+          <span id="sfRegionWrap">
+            <select id="sfRegion"><option value="">Region</option></select>
+          </span>
         </div>
         <div class="sheet-filter-bar" style="margin-top:6px">
           <span class="date-filter-label">📅 Timestamp:</span>
@@ -403,6 +361,9 @@
           <select id="stNM"><option value="">NM</option></select>
           <select id="stMM"><option value="">MM</option></select>
           <select id="stProperty"><option value="">Property (All)</option><option value="Public">Public</option><option value="Private">Private</option></select>
+          <span id="stRegionWrap">
+            <select id="stRegion"><option value="">Region</option></select>
+          </span>
           <span class="date-filter-label">📅 Timestamp:</span>
           <input type="date" id="stDateFrom" />
           <span style="color:#888;font-size:13px">to</span>
@@ -476,6 +437,9 @@
             <option value="Sign Pending">Sign Pending</option>
             <option value="Chairs and Poster Pending">Chairs and Poster Pending</option>
           </select>
+          <span id="reminderRegionWrap">
+            <select id="reminderRegion"><option value="">Region</option></select>
+          </span>
           <button class="primary" onclick="applyReminderFilters()">Apply</button>
           <button onclick="clearReminderFilters()">Clear</button>
         </div>
@@ -516,22 +480,6 @@
       </div>
     </div>
 
-    <!-- RECALCULATE HOTSPOT DATA -->
-    <div class="container">
-      <div class="sheet-preview-card">
-        <div class="sheet-preview-header">
-          <h3>🔄 Hotspot Enrichment</h3>
-        </div>
-        <p style="margin:6px 0 12px;font-size:13px;color:#666;line-height:1.6">
-          Recalculates <b>nearest hotspot</b>, <b>displacement</b>, <b>demand count</b>, <b>idle count</b>, and <b>launch feasibility</b> for all properties. This writes updated values back to the sheet — run only when hotspot/demand/idle data has changed.
-        </p>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <button id="btnRecalcHotspots" class="primary" onclick="recalculateHotspots()">🔄 Recalculate Hotspot Data</button>
-          <span id="recalcStatus" style="font-size:13px;color:#555"></span>
-        </div>
-      </div>
-    </div>
-
     <!-- INCENTIVE TRACKER -->
     <div class="container">
       <div class="sheet-preview-card">
@@ -561,6 +509,10 @@
             <option value="only">Show duplicates only</option>
           </select>
 
+          <span id="incRegionWrap">
+            <select id="incRegion" style="min-width:140px"><option value="">Region (All)</option></select>
+          </span>
+
           <button class="primary" onclick="applyIncentiveFilters()">Apply</button>
           <button onclick="clearIncentiveFilters()">Clear</button>
         </div>
@@ -570,23 +522,6 @@
     </div>
 
   </div><!-- /.app -->
-
-  <!-- ADD POINT MODAL -->
-  <div id="addPointModal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
-      <div class="modal-header">
-        <h3>➕ Add New Point</h3>
-        <button class="modal-close" onclick="closeAddPointModal()">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-grid" id="addPointFields"></div>
-      </div>
-      <div class="modal-footer">
-        <button onclick="closeAddPointModal()">Cancel</button>
-        <button class="primary" onclick="submitAddPoint()">💾 Save Point</button>
-      </div>
-    </div>
-  </div>
 
 <script src="config.js"></script>
 <script src="app.js"></script>

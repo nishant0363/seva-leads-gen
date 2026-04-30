@@ -14,9 +14,6 @@ let centroidMarkers   = [];
 
 let activeFilters = {};
 
-let addPointMode = false;
-let addPointMarker = null;
-
 let hotspotData   = [];
 let demandData    = [];
 let idleData      = [];
@@ -24,7 +21,7 @@ let centroidData  = [];
 
 let hoodExpertData = [];
 const HOOD_EXPERTS_SOURCE = "hood-experts-source";
-const HOOD_EXPERTS_FILL = "hood-experts-fill";
+const HOOD_EXPERTS_FILL   = "hood-experts-fill";
 
 const layerVisible = {
   hoods:       true,
@@ -35,6 +32,7 @@ const layerVisible = {
   centroids:   true,
   hoodExperts: false,
 };
+
 const MAP_STYLES = {
   street: "https://tiles.openfreemap.org/styles/liberty",
   light:  "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -54,7 +52,6 @@ const HOODS_FILL    = "hoods-fill";
 const HOODS_LINE    = "hoods-line";
 
 // ── Active region (set from region-select page) ──────────────
-// Read from sessionStorage; falls back to "all" if not set
 const ACTIVE_REGION = (function () {
   try {
     return (sessionStorage.getItem("selectedRegion") || "all").trim().toLowerCase();
@@ -65,13 +62,17 @@ const ACTIVE_REGION = (function () {
 
 // ── Region default map centres ────────────────────────────────
 const REGION_CENTRES = {
-  bangalore: { center: [77.65,  12.92], zoom: 12 },
-  hyderabad: { center: [78.48,  17.39], zoom: 12 },
-  noida:     { center: [77.39,  28.63], zoom: 12 },
-  delhi:     { center: [77.21,  28.61], zoom: 11 },
-  mumbai:    { center: [72.87,  19.08], zoom: 12 },
-  pune:      { center: [73.85,  18.52], zoom: 12 },
-  chennai:   { center: [80.27,  13.08], zoom: 12 },
+  bangalore:    { center: [77.65,  12.92], zoom: 12 },
+  hyderabad:    { center: [78.48,  17.39], zoom: 12 },
+  noida:        { center: [77.39,  28.63], zoom: 12 },
+  delhi:        { center: [77.21,  28.61], zoom: 11 },
+  mumbai:       { center: [72.87,  19.08], zoom: 12 },
+  pune:         { center: [73.85,  18.52], zoom: 12 },
+  chennai:      { center: [80.27,  13.08], zoom: 12 },
+  gurugram:     { center: [77.02,  28.46], zoom: 12 },
+  "navi mumbai":{ center: [73.02,  19.04], zoom: 12 },
+  ghaziabad:    { center: [77.43,  28.67], zoom: 12 },
+  thane:        { center: [72.97,  19.22], zoom: 12 },
 };
 const DEFAULT_MAP_VIEW = { center: [77.65, 12.9], zoom: 12 };
 
@@ -145,8 +146,6 @@ init();
 
 // ============================================================
 // REGION BANNER
-// Injects a small persistent banner showing the active region
-// and a link back to the region-select page.
 // ============================================================
 function injectRegionBanner() {
   if (document.getElementById("regionBanner")) return;
@@ -158,6 +157,7 @@ function injectRegionBanner() {
   const REGION_COLORS = {
     bangalore: "#3b82f6", hyderabad: "#8b5cf6", noida: "#10b981",
     delhi: "#f59e0b", mumbai: "#ef4444", pune: "#06b6d4", chennai: "#84cc16",
+    gurugram: "#06b6d4", "navi mumbai": "#f97316", ghaziabad: "#84cc16", thane: "#34d399",
     all: "#f0c040",
   };
   const color = REGION_COLORS[ACTIVE_REGION] || "#f0c040";
@@ -184,8 +184,6 @@ function injectRegionBanner() {
       </a>
     </span>`;
   document.body.prepend(banner);
-
-  // Nudge page body down so banner doesn't cover content
   document.body.style.paddingTop = "30px";
 }
 
@@ -205,7 +203,6 @@ async function init() {
 
   await new Promise(resolve => map.on("load", resolve));
 
-  // Load all hoods, then filter to active region
   const allHoods = await fetch(CONFIG.API_URL + "?action=getHoods&t=" + Date.now(), {
     credentials: "omit"
   }).then(r => r.json()).catch(() => ([]));
@@ -228,13 +225,10 @@ async function init() {
 
   initMapSearch();
 
+  // Map click — show coordinates only (no add-point mode)
   map.on("click", function (e) {
     if (markCirclesMode) {
       addCirclePoint(e.lngLat.lat, e.lngLat.lng);
-      return;
-    }
-    if (addPointMode) {
-      openAddPointModal(e.lngLat.lat, e.lngLat.lng);
       return;
     }
 
@@ -387,13 +381,13 @@ function buildLegend() {
   const legend = document.getElementById("mapLegend");
   if (!legend) return;
   const items = [
-    { key: "hoods",       color: "#4da6ff", symbol: "■",  label: "Hood Polygons"        },
-    { key: "properties",  color: "#e74c3c", symbol: "📍", label: "Properties"           },
-    { key: "hotspots",    color: "#f39c12", symbol: "H",  label: "Hotspots"             },
-    { key: "demand",      color: "#2980b9", symbol: "🌊", label: "Demand Heatmap"       },
-    { key: "idle",        color: "#c0392b", symbol: "🔥", label: "Idle Heatmap"         },
-    { key: "centroids",   color: "#27ae60", symbol: "C",  label: "Demand Centroids"     },
-    { key: "hoodExperts", color: "#8e44ad", symbol: "★",  label: "Hood Experts Layer"   },
+    { key: "hoods",       color: "#4da6ff", symbol: "■",  label: "Hood Polygons"      },
+    { key: "properties",  color: "#e74c3c", symbol: "📍", label: "Properties"         },
+    { key: "hotspots",    color: "#f39c12", symbol: "H",  label: "Hotspots"           },
+    { key: "demand",      color: "#2980b9", symbol: "🌊", label: "Demand Heatmap"     },
+    { key: "idle",        color: "#c0392b", symbol: "🔥", label: "Idle Heatmap"       },
+    { key: "centroids",   color: "#27ae60", symbol: "C",  label: "Demand Centroids"   },
+    { key: "hoodExperts", color: "#8e44ad", symbol: "★",  label: "Hood Experts Layer" },
   ];
   legend.innerHTML = `<div class="legend-title">Layers</div>` +
     items.map(item => `
@@ -438,7 +432,6 @@ async function loadLayer(url, name, renderFn) {
   try {
     const res  = await fetch(url + "?t=" + Date.now());
     const data = await res.json();
-    // Filter by region if the data has a "region" column
     const filtered = filterByRegionIfPresent(data);
     console.log(`✅ ${name}: ${filtered.length} rows (of ${data.length}) for region: ${ACTIVE_REGION}`);
     renderFn(filtered);
@@ -447,13 +440,12 @@ async function loadLayer(url, name, renderFn) {
   }
 }
 
-// ── Utility: filter array by region if rows have a region field ──
 function filterByRegionIfPresent(arr) {
   if (!ACTIVE_REGION || ACTIVE_REGION === "all") return arr;
   if (!Array.isArray(arr) || !arr.length) return arr;
   const sample = arr[0];
   const hasRegion = Object.keys(sample).some(k => k.toLowerCase() === "region");
-  if (!hasRegion) return arr; // no region column — return all
+  if (!hasRegion) return arr;
   return arr.filter(row => {
     const r = (row.region || row.Region || "").toString().trim().toLowerCase();
     return r === ACTIVE_REGION || r === "";
@@ -642,10 +634,9 @@ async function loadHoodExpertData() {
     const res  = await fetch(url, { credentials: "omit" });
     const data = await res.json();
     if (!Array.isArray(data) || data.error) {
-      console.warn("⚠️ Hood experts data not available or error:", data);
+      console.warn("⚠️ Hood experts data not available:", data);
       return;
     }
-    // Filter by region
     hoodExpertData = filterByRegionIfPresent(data);
     console.log(`✅ hoodExperts: ${hoodExpertData.length} rows (region: ${ACTIVE_REGION})`);
     drawHoodExpertsLayer();
@@ -669,9 +660,9 @@ function buildHoodExpertPopupHtml(hoodId, hoodName) {
   const hoodRows  = sorted.filter(r => r.date_range === dateRange);
   const hoodRef   = hoodRows[0] || {};
 
-  const avgExpHood      = parseFloat(hoodRef.avg_daily_experts_hood)               || 0;
-  const avgDemHood      = parseFloat(hoodRef.avg_daily_demand_hood)                || 0;
-  const avgIdleMinHood  = parseFloat(hoodRef.avg_daily_idle_min_per_expert_hood)   || 0;
+  const avgExpHood     = parseFloat(hoodRef.avg_daily_experts_hood)             || 0;
+  const avgDemHood     = parseFloat(hoodRef.avg_daily_demand_hood)              || 0;
+  const avgIdleMinHood = parseFloat(hoodRef.avg_daily_idle_min_per_expert_hood) || 0;
 
   const hotspotRows = hoodRows.filter(r => r.hotspot_name && r.hotspot_name.trim());
 
@@ -756,21 +747,17 @@ function drawHoodExpertsLayer() {
       paint:  {
         "fill-color": [
           "interpolate", ["linear"], ["get", "experts"],
-          0,  "#f0f0ff",
-          5,  "#b3c6ff",
-          10, "#6699ff",
-          20, "#2255cc",
-          40, "#001f7a"
+          0,  "#f0f0ff", 5,  "#b3c6ff", 10, "#6699ff", 20, "#2255cc", 40, "#001f7a"
         ],
         "fill-opacity": 0.65
       }
     });
 
     map.on("click", HOOD_EXPERTS_FILL, function (e) {
-      const props   = e.features[0]?.properties || {};
-      const hoodId  = props.hood_id;
+      const props    = e.features[0]?.properties || {};
+      const hoodId   = props.hood_id;
       const hoodName = props.nano_market;
-      const popupEl = document.createElement("div");
+      const popupEl  = document.createElement("div");
       popupEl.innerHTML = buildHoodExpertPopupHtml(hoodId, hoodName);
       new maplibregl.Popup({ closeButton: true, maxWidth: "340px" })
         .setLngLat(e.lngLat)
@@ -828,7 +815,6 @@ function getFilteredCentroids() { return centroidData.filter(passesNMMFilter);  
 // MAIN DATA LOADING
 // ============================================================
 async function loadData() {
-  // Append region param so Apps Script can pre-filter server-side if desired
   const regionParam = ACTIVE_REGION && ACTIVE_REGION !== "all"
     ? `&region=${encodeURIComponent(ACTIVE_REGION)}`
     : "";
@@ -838,7 +824,6 @@ async function loadData() {
     const res  = await fetch(url);
     const text = await res.text();
     const data = JSON.parse(text);
-    // Client-side region filter as safety net
     allData = filterByRegionIfPresent(data);
     console.log(`✅ ${allData.length} rows loaded (of ${data.length}) for region: ${ACTIVE_REGION}`);
 
@@ -851,6 +836,7 @@ async function loadData() {
     populateFilters();
     populateSheetFilters();
     populateSummaryFilters();
+    populateReminderRegionFilter();
 
     const sfActive = Object.values(getSheetFilters()).some(v => v);
     renderSheetPreview(sfActive ? getSheetFilteredData() : allData);
@@ -858,42 +844,9 @@ async function loadData() {
     renderReminderTable();
     renderBangaloreOverview();
     renderHotspotCoverage();
+    renderIncentiveTables();
   } catch (err) {
     console.error("❌ Fetch failed:", err);
-  }
-}
-
-// ============================================================
-// RECALCULATE HOTSPOT DATA
-// ============================================================
-async function recalculateHotspots() {
-  const btn = document.getElementById("btnRecalcHotspots");
-  if (btn) { btn.disabled = true; btn.textContent = "⏳ Recalculating…"; }
-  const statusEl = document.getElementById("recalcStatus");
-  if (statusEl) { statusEl.textContent = "Fetching & enriching hotspot data…"; statusEl.style.color = "#555"; }
-  try {
-    const url = CONFIG.API_URL + "?recalc=1&t=" + Date.now();
-    const res = await fetch(url, { method: "GET", redirect: "follow", credentials: "omit" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data)) throw new Error(data.error || "Unexpected response");
-    if (statusEl) statusEl.textContent = `⏳ Writing ${data.length} enriched rows…`;
-    const ENRICHED_COLS = ["nearest hotspot","displacement to nearest hotspot","demand count","idle count","launch feasibility"];
-    const writes = data.filter(row => row._rowIndex).map(row => {
-      const payload = { _rowIndex: row._rowIndex };
-      ENRICHED_COLS.forEach(col => { if (row[col] !== undefined) payload[col] = row[col]; });
-      return fetch(CONFIG.API_URL, { method: "POST", mode: "no-cors", credentials: "omit", body: JSON.stringify(payload) });
-    });
-    await Promise.all(writes);
-    allData = filterByRegionIfPresent(data);
-    if (statusEl) { statusEl.textContent = `✅ Done — ${data.length} rows enriched and saved.`; statusEl.style.color = "#27ae60"; }
-    renderMarkers();
-    renderSheetPreview(allData);
-    renderSummaryTables();
-  } catch (err) {
-    if (statusEl) { statusEl.textContent = "❌ Error: " + err.message; statusEl.style.color = "#c0392b"; }
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "🔄 Recalculate Hotspot Data"; }
   }
 }
 
@@ -919,18 +872,6 @@ function renderMarkers() {
   allData.forEach(row => {
     const lat = parseFloat(row.Lat), lng = parseFloat(row.Long);
     if (!isNaN(lat) && !isNaN(lng)) {
-      if (!row.NM || !row.MM) {
-        const hood = assignHood({ lat, lng });
-        if (hood) {
-          row.NM = hood.nano_market;
-          row.MM = hood.micro_market;
-          row["NM Id"] = hood.hood_id;
-          if (row._rowIndex) {
-            fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(row) })
-              .catch(err => console.error("❌ Auto-save failed", err));
-          }
-        }
-      }
       const name = getPropertyName(row);
       const el = createPropertyMarkerEl(row);
       el.addEventListener("click", () => showDetails(row));
@@ -951,15 +892,16 @@ function renderMarkers() {
 // ============================================================
 function applyFilters() {
   activeFilters = {
-    Category:       document.getElementById("filterCategory")?.value       || "",
-    Property:       document.getElementById("filterProperty")?.value       || "",
-    "App status":   document.getElementById("filterAppStatus")?.value      || "",
-    "Lead Status":  document.getElementById("filterLeadStatus")?.value     || "",
-    "Final Status": document.getElementById("filterFinalStatus")?.value    || "",
-    NM:             document.getElementById("filterNM")?.value             || "",
-    MM:             document.getElementById("filterMM")?.value             || "",
-    dateFrom:       document.getElementById("filterDateFrom")?.value       || "",
-    dateTo:         document.getElementById("filterDateTo")?.value         || "",
+    Category:       document.getElementById("filterCategory")?.value    || "",
+    Property:       document.getElementById("filterProperty")?.value    || "",
+    "App status":   document.getElementById("filterAppStatus")?.value   || "",
+    "Lead Status":  document.getElementById("filterLeadStatus")?.value  || "",
+    "Final Status": document.getElementById("filterFinalStatus")?.value || "",
+    NM:             document.getElementById("filterNM")?.value          || "",
+    MM:             document.getElementById("filterMM")?.value          || "",
+    region:         document.getElementById("filterRegion")?.value      || "",
+    dateFrom:       document.getElementById("filterDateFrom")?.value    || "",
+    dateTo:         document.getElementById("filterDateTo")?.value      || "",
   };
   filterAndRender();
 }
@@ -972,6 +914,10 @@ function filterAndRender() {
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
     for (const key of colKeys) {
       if (activeFilters[key] && row[key] !== activeFilters[key]) return false;
+    }
+    if (activeFilters.region) {
+      const rowRegion = (row.region || row.Region || "").toString().trim().toLowerCase();
+      if (rowRegion !== activeFilters.region.toLowerCase()) return false;
     }
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
@@ -1044,91 +990,18 @@ function populateFilters() {
       values.map(v => `<option value="${v}">${v}</option>`).join("");
     select.value = current;
   });
-}
 
-// ============================================================
-// ADD POINT MODE
-// ============================================================
-const ADD_POINT_FIELDS = [
-  { key: "Name of the property",                  label: "Property Name",         type: "text" },
-  { key: "Category",                              label: "Category",              type: "text" },
-  { key: "Sub Category",                          label: "Sub Category",          type: "text" },
-  { key: "Road",                                  label: "Road",                  type: "text" },
-  { key: "Property",                              label: "Property Type",         type: "text" },
-  { key: "App status",                            label: "App Status",            type: "text" },
-  { key: "Lead Status",                           label: "Lead Status",           type: "text" },
-  { key: "Final Status",                          label: "Final Status",          type: "text" },
-  { key: "Location (Google Maps URL) / Map Code", label: "Maps Link / Plus Code", type: "url"  },
-  { key: "Contact Name",                          label: "Contact Name",          type: "text" },
-  { key: "Contact number",                        label: "Contact Number",        type: "tel"  },
-  { key: "Comment",                               label: "Comment",               type: "text" },
-  { key: "Restroom ID",                           label: "Restroom ID",           type: "text" },
-];
-
-function toggleAddPointMode() {
-  addPointMode = !addPointMode;
-  const btn = document.getElementById("btnAddPoint");
-  if (addPointMode) {
-    btn.textContent = "❌ Cancel Add Point";
-    btn.style.background = "#c0392b";
-    map.getContainer().classList.add("map-crosshair");
-  } else {
-    btn.textContent = "➕ Add Point";
-    btn.style.background = "";
-    map.getContainer().classList.remove("map-crosshair");
-    if (addPointMarker) { addPointMarker.remove(); addPointMarker = null; }
+  // Region filter (only meaningful in "all" mode)
+  const regionSel = document.getElementById("filterRegion");
+  if (regionSel) {
+    const cur = regionSel.value;
+    const regions = [...new Set(allData.map(r => (r.region || r.Region || "").toString().trim().toLowerCase()).filter(Boolean))].sort();
+    regionSel.innerHTML = `<option value="">Region</option>` +
+      regions.map(r => `<option value="${r}">${r.charAt(0).toUpperCase() + r.slice(1)}</option>`).join("");
+    regionSel.value = cur;
+    const wrap = document.getElementById("filterRegionWrap");
+    if (wrap) wrap.style.display = (ACTIVE_REGION && ACTIVE_REGION !== "all") ? "none" : "";
   }
-}
-
-function openAddPointModal(lat, lng) {
-  if (addPointMarker) addPointMarker.remove();
-  const el = document.createElement("div");
-  el.style.cssText = "font-size:24px;cursor:pointer";
-  el.textContent = "📌";
-  addPointMarker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map);
-
-  const container = document.getElementById("addPointFields");
-  if (!container) return;
-  container.innerHTML = `
-    <div class="modal-field"><label>Lat (auto)</label><input type="number" id="ap_Lat" value="${lat.toFixed(7)}" readonly style="background:#f0f0f0"/></div>
-    <div class="modal-field"><label>Long (auto)</label><input type="number" id="ap_Long" value="${lng.toFixed(7)}" readonly style="background:#f0f0f0"/></div>
-  ` + ADD_POINT_FIELDS.map(f => `
-    <div class="modal-field"><label>${f.label}</label><input type="${f.type}" id="ap_${f.key.replace(/[\s.()/]/g,'_')}" placeholder="${f.label} (optional)"/></div>
-  `).join("");
-  document.getElementById("addPointModal").style.display = "flex";
-}
-
-function closeAddPointModal() {
-  document.getElementById("addPointModal").style.display = "none";
-  if (addPointMarker) { addPointMarker.remove(); addPointMarker = null; }
-  if (addPointMode) toggleAddPointMode();
-}
-
-async function submitAddPoint() {
-  const lat = document.getElementById("ap_Lat").value;
-  const lng = document.getElementById("ap_Long").value;
-  const newRow = {
-    "Lat":    parseFloat(lat),
-    "Long":   parseFloat(lng),
-    "region": ACTIVE_REGION !== "all" ? ACTIVE_REGION : ""  // stamp region
-  };
-  ADD_POINT_FIELDS.forEach(f => {
-    const el = document.getElementById("ap_" + f.key.replace(/[\s.()/]/g,'_'));
-    if (el && el.value.trim()) newRow[f.key] = f.type === "number" ? parseFloat(el.value) : el.value.trim();
-  });
-  const hood = assignHood({ lat: parseFloat(lat), lng: parseFloat(lng) });
-  if (hood) {
-    newRow.NM = hood.nano_market;
-    newRow.MM = hood.micro_market;
-    newRow["NM Id"] = hood.hood_id;
-    if (!newRow.region && hood.region) newRow.region = hood.region;
-  }
-  try {
-    const res  = await fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(newRow) });
-    const json = await res.json();
-    if (json.success) { alert(`✅ Point added\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}, Region: ${newRow.region || "-"}`); closeAddPointModal(); loadData(); }
-    else alert("❌ Failed: " + JSON.stringify(json));
-  } catch (err) { alert("❌ Error: " + err.message); }
 }
 
 // ============================================================
@@ -1143,6 +1016,10 @@ function getFilteredData() {
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "NM", "MM"];
     for (const key of colKeys) {
       if (activeFilters[key] && row[key] !== activeFilters[key]) return false;
+    }
+    if (activeFilters.region) {
+      const rowRegion = (row.region || row.Region || "").toString().trim().toLowerCase();
+      if (rowRegion !== activeFilters.region.toLowerCase()) return false;
     }
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
@@ -1279,71 +1156,7 @@ function downloadExtraLayer(layerType,format){
 }
 
 // ============================================================
-// URL / COORD RESOLUTION
-// ============================================================
-const LOCATION_COL = "Location (Google Maps URL) / Map Code";
-
-async function resolveCoords(input) {
-  if (!input || !input.toString().trim()) throw new Error("Empty input");
-  const raw = input.toString().trim();
-  const directMatch = raw.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (directMatch) return { lat: parseFloat(directMatch[1]), lng: parseFloat(directMatch[2]) };
-  const backendUrl = CONFIG.API_URL + "?action=resolveUrl&url=" + encodeURIComponent(raw);
-  const res  = await fetch(backendUrl);
-  if (!res.ok) throw new Error(`Backend resolve failed: ${res.status}`);
-  const json = JSON.parse(await res.text());
-  if (json.error) throw new Error(`Backend error: ${json.error}`);
-  if (json.lat != null && json.lng != null) return { lat: parseFloat(json.lat), lng: parseFloat(json.lng) };
-  const expandedUrl = json.url || "";
-  const d3Match = expandedUrl.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-  if (d3Match) return { lat: parseFloat(d3Match[1]), lng: parseFloat(d3Match[2]) };
-  const atMatch = expandedUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (atMatch) return { lat: parseFloat(atMatch[1]), lng: parseFloat(atMatch[2]) };
-  throw new Error(`Could not extract coords from: "${expandedUrl || raw}"`);
-}
-
-async function fillLatLong() {
-  let updated = [], skippedCount = 0, failedCount = 0;
-  for (let row of allData) {
-    const locationInput = row[LOCATION_COL];
-    if (!locationInput || !locationInput.toString().trim()) { skippedCount++; continue; }
-    const latOk = row.Lat  && !isNaN(parseFloat(row.Lat))  && parseFloat(row.Lat)  !== 0;
-    const lngOk = row.Long && !isNaN(parseFloat(row.Long)) && parseFloat(row.Long) !== 0;
-    if (latOk && lngOk) { skippedCount++; continue; }
-    try {
-      const coords = await resolveCoords(locationInput);
-      row.Lat = coords.lat; row.Long = coords.lng;
-      updated.push(row);
-    } catch (e) { failedCount++; console.error(`❌ _rowIndex:${row._rowIndex} — failed: ${e.message}`); }
-  }
-  updated.forEach(r => {
-    fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify({ _rowIndex: r._rowIndex, Lat: r.Lat, Long: r.Long }) });
-  });
-  alert(`✅ Updated ${updated.length} rows\n⏭️ Skipped: ${skippedCount}\n❌ Failed: ${failedCount}`);
-  if (updated.length > 0) loadData();
-}
-
-function fixMissingNM() {
-  let updated = [];
-  allData.forEach(row => {
-    const lat = parseFloat(row.Lat), lng = parseFloat(row.Long);
-    if (isNaN(lat) || isNaN(lng)) return;
-    if (isEmpty(row.NM) || isEmpty(row.MM)) {
-      const hood = assignHood({ lat, lng });
-      if (hood) {
-        row.NM = hood.nano_market; row.MM = hood.micro_market; row["NM Id"] = hood.hood_id;
-        updated.push(row);
-      }
-    }
-  });
-  updated.forEach(r => {
-    fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify({ _rowIndex: r._rowIndex, NM: r.NM, MM: r.MM, "NM Id": r["NM Id"] }) });
-  });
-  alert(`✅ Updated ${updated.length} rows`);
-}
-
-// ============================================================
-// DETAILS + SAVE
+// VIEW-ONLY DETAILS
 // ============================================================
 function showHoodDetails(h) {
   document.getElementById("detailsTable").innerHTML = `
@@ -1353,16 +1166,6 @@ function showHoodDetails(h) {
     <tr><td><b>Hood ID</b></td><td>${h.hood_id}</td></tr>`;
 }
 
-const DETAIL_DROPDOWNS = {
-  "Property": ["Private", "Public"],
-  "App status": ["Active", "Inactive"],
-  "Lead Status": ["2. Owner conversation pending","3. Owner's confirmation pending","4. Confirmed","5. Follow up required","6. Dropped"],
-  "Final Status": ["Dropped off","Active","Cold","Deal closed","Deal closed - sign pending","No deal required","To be reactivated","Deal - closed - Chairs pending","Dropped off after launch"],
-  "Closure type": ["Resting + Washroom","Resting","NA"],
-  "Set up": ["Chairs to be set","Owner will setup chairs","Chairs available","NA"],
-  "Category": ["Ladies PG","Shop","Restaurant","Apartment","Gated community","Independent Builder floor","Bus Stop","Park","Petrol Pump","Public Washroom","Other"]
-};
-
 function showDetails(row) {
   currentRow = row;
   const table = document.getElementById("detailsTable");
@@ -1370,45 +1173,10 @@ function showDetails(row) {
   Object.keys(row).forEach(key => {
     if (key === "_rowIndex") return;
     const val = row[key] != null ? row[key] : "";
-    if (DETAIL_DROPDOWNS[key]) {
-      const options = DETAIL_DROPDOWNS[key].map(opt =>
-        `<option value="${escHtml(opt)}" ${opt === String(val) ? "selected" : ""}>${escHtml(opt)}</option>`).join("");
-      const extraOption = val && !DETAIL_DROPDOWNS[key].includes(String(val))
-        ? `<option value="${escHtml(val)}" selected>${escHtml(val)}</option>` : "";
-      table.innerHTML += `<tr><td>${escHtml(key)}</td><td><select class="detail-select" data-key="${escHtml(key)}"><option value="">-- select --</option>${extraOption}${options}</select></td></tr>`;
-    } else if (key === "Timestamp") {
-      const displayVal = formatTsDisplay(val) || escHtml(String(val));
-      table.innerHTML += `<tr><td>${escHtml(key)}</td><td style="background:#f5f5f5;color:#888;font-style:italic" title="Read only">${displayVal}</td></tr>`;
-    } else {
-      table.innerHTML += `<tr><td>${escHtml(key)}</td><td contenteditable="true" data-key="${escHtml(key)}">${escHtml(String(val))}</td></tr>`;
-    }
+    const TS_COLS = ["Timestamp","Signage date","Launch date"];
+    const display = TS_COLS.includes(key) ? (formatTsDisplay(val) || escHtml(String(val))) : escHtml(String(val));
+    table.innerHTML += `<tr><td style="font-weight:600;color:#555;white-space:nowrap">${escHtml(key)}</td><td style="word-break:break-word">${display}</td></tr>`;
   });
-  table.innerHTML += `<tr><td colspan="2" style="padding-top:10px;border-top:1px solid #eee"><button class="primary" onclick="saveCurrent()" style="width:100%;padding:9px;font-size:14px">💾 Save Changes</button></td></tr>`;
-}
-
-function formatTimestamp(date) {
-  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
-  return `${ist.getUTCMonth()+1}/${ist.getUTCDate()}/${ist.getUTCFullYear()} ${String(ist.getUTCHours()).padStart(2,'0')}:${String(ist.getUTCMinutes()).padStart(2,'0')}:${String(ist.getUTCSeconds()).padStart(2,'0')}`;
-}
-
-function saveCurrent() {
-  if (!currentRow) return;
-  const prevAppStatus   = String(currentRow["App status"]   || "").trim();
-  const prevFinalStatus = String(currentRow["Final Status"] || "").trim();
-  document.querySelectorAll("[contenteditable]").forEach(cell => { const key = cell.dataset.key; if (key) currentRow[key] = cell.innerText.trim(); });
-  document.querySelectorAll(".detail-select").forEach(sel => { const key = sel.dataset.key; if (key) currentRow[key] = sel.value; });
-  if (!currentRow._rowIndex) { alert("❌ Cannot save — row index missing"); return; }
-  const nowIST = formatTimestamp(new Date());
-  const newAppStatus = String(currentRow["App status"] || "").trim();
-  if (newAppStatus === "Active" && prevAppStatus !== "Active") { currentRow["Launch date"] = nowIST; }
-  const CLOSED_STATUSES = ["Deal closed", "Deal - closed - Chairs pending"];
-  const newFinalStatus = String(currentRow["Final Status"] || "").trim();
-  if (CLOSED_STATUSES.includes(newFinalStatus) && !CLOSED_STATUSES.includes(prevFinalStatus)) { currentRow["Signage date"] = nowIST; }
-  const savePayload = Object.assign({}, currentRow);
-  delete savePayload["Timestamp"];
-  fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(savePayload) })
-    .then(() => { alert("✅ Saved"); showDetails(currentRow); })
-    .catch(err => alert("❌ Save failed: " + err.message));
 }
 
 // ============================================================
@@ -1442,20 +1210,21 @@ function formatTsDisplay(val) {
 // ============================================================
 function getSheetFilters() {
   return {
-    Category:       document.getElementById("sfCategory")?.value       || "",
-    Property:       document.getElementById("sfProperty")?.value       || "",
-    "App status":   document.getElementById("sfAppStatus")?.value      || "",
-    "Lead Status":  document.getElementById("sfLeadStatus")?.value     || "",
-    "Final Status": document.getElementById("sfFinalStatus")?.value    || "",
-    "Closure type": document.getElementById("sfClosureType")?.value    || "",
-    NM:             document.getElementById("sfNM")?.value             || "",
-    MM:             document.getElementById("sfMM")?.value             || "",
-    dateFrom:       document.getElementById("sfDateFrom")?.value       || "",
-    dateTo:         document.getElementById("sfDateTo")?.value         || "",
-    signageFrom:    document.getElementById("sfSignageFrom")?.value    || "",
-    signateTo:      document.getElementById("sfSignageTo")?.value      || "",
-    launchFrom:     document.getElementById("sfLaunchFrom")?.value     || "",
-    launchTo:       document.getElementById("sfLaunchTo")?.value       || "",
+    Category:       document.getElementById("sfCategory")?.value    || "",
+    Property:       document.getElementById("sfProperty")?.value    || "",
+    "App status":   document.getElementById("sfAppStatus")?.value   || "",
+    "Lead Status":  document.getElementById("sfLeadStatus")?.value  || "",
+    "Final Status": document.getElementById("sfFinalStatus")?.value || "",
+    "Closure type": document.getElementById("sfClosureType")?.value || "",
+    NM:             document.getElementById("sfNM")?.value          || "",
+    MM:             document.getElementById("sfMM")?.value          || "",
+    region:         document.getElementById("sfRegion")?.value      || "",
+    dateFrom:       document.getElementById("sfDateFrom")?.value    || "",
+    dateTo:         document.getElementById("sfDateTo")?.value      || "",
+    signageFrom:    document.getElementById("sfSignageFrom")?.value || "",
+    signateTo:      document.getElementById("sfSignageTo")?.value   || "",
+    launchFrom:     document.getElementById("sfLaunchFrom")?.value  || "",
+    launchTo:       document.getElementById("sfLaunchTo")?.value    || "",
   };
 }
 
@@ -1472,6 +1241,10 @@ function getSheetFilteredData() {
     const colKeys = ["Category", "Property", "App status", "Lead Status", "Final Status", "Closure type", "NM", "MM"];
     for (const key of colKeys) {
       if (sf[key] && row[key] !== sf[key]) return false;
+    }
+    if (sf.region) {
+      const rowRegion = (row.region || row.Region || "").toString().trim().toLowerCase();
+      if (rowRegion !== sf.region.toLowerCase()) return false;
     }
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
@@ -1500,7 +1273,7 @@ function applySheetFilters() {
 }
 
 function clearSheetFilters() {
-  ["sfCategory","sfProperty","sfAppStatus","sfLeadStatus","sfFinalStatus","sfClosureType","sfNM","sfMM"].forEach(id => {
+  ["sfCategory","sfProperty","sfAppStatus","sfLeadStatus","sfFinalStatus","sfClosureType","sfNM","sfMM","sfRegion"].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = "";
   });
   ["sfDateFrom","sfDateTo","sfSignageFrom","sfSignageTo","sfLaunchFrom","sfLaunchTo"].forEach(id => {
@@ -1509,19 +1282,16 @@ function clearSheetFilters() {
   renderSheetPreview(allData);
 }
 
-function applyDateFilter()  { applySheetFilters(); }
-function clearDateFilter()  { clearSheetFilters(); }
-
 function populateSheetFilters() {
   const fields = [
-    { key: "Category",      id: "sfCategory"     },
-    { key: "Property",      id: "sfProperty"     },
-    { key: "App status",    id: "sfAppStatus"    },
-    { key: "Lead Status",   id: "sfLeadStatus"   },
-    { key: "Final Status",  id: "sfFinalStatus"  },
-    { key: "Closure type",  id: "sfClosureType"  },
-    { key: "NM",            id: "sfNM"           },
-    { key: "MM",            id: "sfMM"           },
+    { key: "Category",      id: "sfCategory"    },
+    { key: "Property",      id: "sfProperty"    },
+    { key: "App status",    id: "sfAppStatus"   },
+    { key: "Lead Status",   id: "sfLeadStatus"  },
+    { key: "Final Status",  id: "sfFinalStatus" },
+    { key: "Closure type",  id: "sfClosureType" },
+    { key: "NM",            id: "sfNM"          },
+    { key: "MM",            id: "sfMM"          },
   ];
   fields.forEach(f => {
     const el = document.getElementById(f.id);
@@ -1532,6 +1302,17 @@ function populateSheetFilters() {
       vals.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join("");
     el.value = current;
   });
+
+  const sfRegion = document.getElementById("sfRegion");
+  if (sfRegion) {
+    const cur = sfRegion.value;
+    const regions = [...new Set(allData.map(r => (r.region || r.Region || "").toString().trim().toLowerCase()).filter(Boolean))].sort();
+    sfRegion.innerHTML = `<option value="">Region</option>` +
+      regions.map(r => `<option value="${r}">${r.charAt(0).toUpperCase() + r.slice(1)}</option>`).join("");
+    sfRegion.value = cur;
+    const wrap = document.getElementById("sfRegionWrap");
+    if (wrap) wrap.style.display = (ACTIVE_REGION && ACTIVE_REGION !== "all") ? "none" : "";
+  }
 }
 
 function renderSheetPreview(data) {
@@ -1567,7 +1348,13 @@ function renderSheetPreview(data) {
 
   const sortedData = sortData(data, getSortState("sheetPreview"));
 
-  if (countEl) countEl.textContent = `${sortedData.length} rows`;
+  // ── Row count: show city-filtered allData count as total ──
+  if (countEl) {
+    const hasFilters = Object.values(getSheetFilters()).some(v => v);
+    countEl.textContent = hasFilters
+      ? `${sortedData.length} of ${allData.length} rows`
+      : `${allData.length} rows`;  // allData is already city-filtered
+  }
 
   if (!sortedData.length) {
     table.innerHTML = "<tr><td colspan='99' style='text-align:center;color:#aaa;padding:16px'>No rows match filters</td></tr>";
@@ -1626,6 +1413,7 @@ function getSummaryFilters() {
     NM:       document.getElementById("stNM")?.value       || "",
     MM:       document.getElementById("stMM")?.value       || "",
     Property: document.getElementById("stProperty")?.value || "",
+    region:   document.getElementById("stRegion")?.value   || "",
     dateFrom: document.getElementById("stDateFrom")?.value || "",
     dateTo:   document.getElementById("stDateTo")?.value   || "",
   };
@@ -1639,6 +1427,10 @@ function getSummaryFilteredData() {
     if (sf.NM && row.NM !== sf.NM) return false;
     if (sf.MM && row.MM !== sf.MM) return false;
     if (sf.Property && row.Property !== sf.Property) return false;
+    if (sf.region) {
+      const rowRegion = (row.region || row.Region || "").toString().trim().toLowerCase();
+      if (rowRegion !== sf.region.toLowerCase()) return false;
+    }
     if (from || to) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
@@ -1659,14 +1451,23 @@ function populateSummaryFilters() {
       vals.map(v => `<option value="${v}">${escHtml(v)}</option>`).join("");
     el.value = current;
   });
+
+  const stRegion = document.getElementById("stRegion");
+  if (stRegion) {
+    const cur = stRegion.value;
+    const regions = [...new Set(allData.map(r => (r.region || r.Region || "").toString().trim().toLowerCase()).filter(Boolean))].sort();
+    stRegion.innerHTML = `<option value="">Region</option>` +
+      regions.map(r => `<option value="${r}">${r.charAt(0).toUpperCase() + r.slice(1)}</option>`).join("");
+    stRegion.value = cur;
+    const wrap = document.getElementById("stRegionWrap");
+    if (wrap) wrap.style.display = (ACTIVE_REGION && ACTIVE_REGION !== "all") ? "none" : "";
+  }
 }
 
-function applySummaryFilters() {
-  renderSummaryTables();
-}
+function applySummaryFilters() { renderSummaryTables(); }
 
 function clearSummaryFilters() {
-  ["stNM","stMM","stProperty","stDateFrom","stDateTo"].forEach(id => {
+  ["stNM","stMM","stProperty","stRegion","stDateFrom","stDateTo"].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = "";
   });
   renderSummaryTables();
@@ -1717,9 +1518,7 @@ function renderSummaryTables() {
         const num = cats[c]||0;
         const denom = data.filter(r=>normalizeCategory(r.Category)===c).length;
         const txt = pct(num, denom);
-        return num > 0
-          ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>`
-          : `<td>${txt}</td>`;
+        return num > 0 ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>` : `<td>${txt}</td>`;
       }).join("")}</tr>`;
     } else if (status === "Launched") {
       const launchedRows = data.filter(r => (r["App status"]||"").trim()==="Active");
@@ -1734,9 +1533,7 @@ function renderSummaryTables() {
         const num = cats[c]||0;
         const denom = data.filter(r=>normalizeCategory(r.Category)===c).length;
         const txt = pct(num, denom);
-        return num > 0
-          ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>`
-          : `<td>${txt}</td>`;
+        return num > 0 ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:600">${txt}</td>` : `<td>${txt}</td>`;
       }).join("")}</tr>`;
     } else {
       rows = data.filter(r => r["Final Status"] === status);
@@ -1860,6 +1657,7 @@ function getIncentiveFilters() {
     dateTo:     document.getElementById("incDateTo")?.value     || "",
     proximity:  document.getElementById("incProximity")?.value  || "all",
     duplicates: document.getElementById("incDuplicates")?.value || "all",
+    region:     document.getElementById("incRegion")?.value     || "",
   };
 }
 
@@ -1875,12 +1673,15 @@ function renderIncentiveTables() {
   const container = document.getElementById("incentiveContainer");
   if (!container) return;
 
-  const { dateFrom, dateTo, proximity, duplicates } = getIncentiveFilters();
+  const { dateFrom, dateTo, proximity, duplicates, region } = getIncentiveFilters();
   const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
   const to   = dateTo   ? new Date(dateTo   + "T23:59:59") : null;
 
   let base = allData;
-  if (proximity === "250") base = allData.filter(r => { const d = parseFloat(r["displacement to nearest hotspot"]); return !isNaN(d) && d <= 250; });
+  if (region) {
+    base = base.filter(r => (r.region || r.Region || "").toString().trim().toLowerCase() === region.toLowerCase());
+  }
+  if (proximity === "250") base = base.filter(r => { const d = parseFloat(r["displacement to nearest hotspot"]); return !isNaN(d) && d <= 250; });
   if (duplicates === "exclude") base = base.filter(r => (r["Duplicate"]||"").trim().toLowerCase() !== "duplicate");
   else if (duplicates === "only") base = base.filter(r => (r["Duplicate"]||"").trim().toLowerCase() === "duplicate");
 
@@ -1964,13 +1765,26 @@ function renderIncentiveTables() {
       <thead><tr><th class="rn-cell">#</th><th>Name</th><th>Email</th><th style="text-align:center">Launched</th><th>Launched Properties</th>${privateExtraTh}<th style="text-align:center">Leads</th><th style="text-align:center">Non-Dup<br>Leads</th><th>Duplicate Map</th><th style="text-align:center">Deals<br>Closed</th><th>Closed Properties</th><th style="text-align:right">Incentive</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr class="summary-total-row"><td class="rn-cell"></td><td></td><td><b>Total</b></td><td style="text-align:center"><b>${totalLaunches}</b></td><td></td>${privateExtraTd}<td style="text-align:center"><b>${totalLeads}</b></td><td style="text-align:center"><b>${totalNonDupLeads}</b></td><td></td><td style="text-align:center"><b>${totalDeals}</b></td><td></td><td style="text-align:right;font-weight:700;color:#27ae60">₹${totalIncentive}</td></tr></tfoot>
-    </table></div>
-    <button class="summary-dl-btn" style="margin-top:6px" onclick="downloadSummaryTable('${tableId}','incentive_${propType.toLowerCase()}')">⬇ CSV</button>`;
+    </table></div>`;
   }
 
   const proximityLabel=proximity==="250"?`<span style="background:#e74c3c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">≤250m from hotspot</span>`:`<span style="background:#2980b9;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">All properties</span>`;
   const duplicatesLabel=duplicates==="exclude"?`<span style="background:#e67e22;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">Duplicates excluded</span>`:duplicates==="only"?`<span style="background:#8e44ad;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px">Duplicates only</span>`:"";
   const incentiveNote=`<div style="background:#fffbe6;border:1px solid #f0d060;border-radius:6px;padding:10px 14px;font-size:12px;color:#7a6000;margin-bottom:16px;line-height:1.8"><b>Incentive formula —</b><br><b>Private Launches:</b> 1=₹100 · 2=₹200 · 3=₹400 · 4=₹600 · 5=₹800 · 6=₹1000 (each extra adds ₹200) + <b>🚿 Washroom Bonus: ₹100/property</b> | <b>Public:</b> ₹20 per launched property</div>`;
+
+  // Populate region filter
+  const incRegionEl = document.getElementById("incRegion");
+  if (incRegionEl && !incRegionEl.dataset.populated) {
+    const regions = [...new Set(allData.map(r => (r.region || r.Region || "").toString().trim().toLowerCase()).filter(Boolean))].sort();
+    incRegionEl.innerHTML = `<option value="">Region (All)</option>` +
+      regions.map(r => `<option value="${r}">${r.charAt(0).toUpperCase() + r.slice(1)}</option>`).join("");
+    incRegionEl.dataset.populated = "1";
+    const wrap = document.getElementById("incRegionWrap");
+    if (ACTIVE_REGION && ACTIVE_REGION !== "all") {
+      incRegionEl.value = ACTIVE_REGION;
+      if (wrap) wrap.style.display = "none";
+    }
+  }
 
   container.innerHTML = incentiveNote +
     `<div class="summary-block"><div class="summary-block-header"><h4 class="summary-block-title">🏠 Private Properties ${proximityLabel}${duplicatesLabel}</h4></div>${renderTable(buildTableData("Private"),"Private","incPrivateTable")}</div>` +
@@ -1982,12 +1796,17 @@ function clearIncentiveFilters() {
   ["incDateFrom","incDateTo"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
   const prox=document.getElementById("incProximity"); if(prox)prox.value="all";
   const dup=document.getElementById("incDuplicates"); if(dup)dup.value="all";
+  const reg=document.getElementById("incRegion");
+  if(reg) {
+    reg.dataset.populated = "";
+    if (ACTIVE_REGION && ACTIVE_REGION !== "all") reg.value = ACTIVE_REGION;
+    else reg.value = "";
+  }
   renderIncentiveTables();
 }
 
 // ============================================================
-// BANGALORE OVERVIEW
-// (now region-aware: shows the current region label instead of hardcoding "Bangalore")
+// BANGALORE / REGION OVERVIEW
 // ============================================================
 function fuzzyScore(str,query){
   if(!str||!query)return 0;
@@ -2001,9 +1820,6 @@ function fuzzyScore(str,query){
   return dp[m][n]/Math.max(m,n);
 }
 
-function fuzzyMatch(str,query){return fuzzyScore(str,query)>=0.5;}
-
-// Region-specific MM groupings — extend as you add more cities
 const REGION_MM_GROUPS = {
   bangalore: {
     "Mid Belt":["bellandur","brookefield","hoodi","kudlu","mahadevapura","marathahalli","munnekollal","sarjapur","whitefield 1","whitefield 2","whitefield 3","hsr","indiranagar","koramangala","varthur"],
@@ -2022,20 +1838,17 @@ const REGION_MM_GROUPS = {
   },
 };
 
-// Fallback: group all MMs under a single group named after the region
 function buildRegionMaps() {
   const allHoodMMs=[...new Set(hoods.map(h=>h.micro_market).filter(Boolean))];
   const groups = REGION_MM_GROUPS[ACTIVE_REGION];
 
   if (!groups) {
-    // No known grouping — put all MMs in one bucket named after the region
     const label = ACTIVE_REGION === "all" ? "All" : (ACTIVE_REGION.charAt(0).toUpperCase() + ACTIVE_REGION.slice(1));
     return { source: "all_mms", [label]: allHoodMMs };
   }
 
   const result = { source: "fuzzy_mm" };
   Object.keys(groups).forEach(g => result[g] = []);
-  const unmatched = [];
 
   allHoodMMs.forEach(mm => {
     let bestRegion=null,bestScore=0;
@@ -2043,7 +1856,6 @@ function buildRegionMaps() {
       for(const known of knownMMs){const score=fuzzyScore(mm,known);if(score>bestScore){bestScore=score;bestRegion=grp;}}
     }
     if(bestScore>=0.5)result[bestRegion].push(mm);
-    else unmatched.push(mm);
   });
   return result;
 }
@@ -2083,7 +1895,6 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
   const launchedToday = launchScopeActive.filter(r => isToday(r["Launch date"])).length;
   const launchedTotal = launchScopeActive.length;
 
-  // Build full region NMs from all groups
   const subGroups = Object.keys(regionMaps).filter(k => k !== "source");
   const allMMs = [...new Set(subGroups.flatMap(g => regionMaps[g] || []))];
   const allNMs = nmsForMMs(allMMs);
@@ -2103,9 +1914,7 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
     const regionNMs = nmsForMMs(mms);
     const withActive = regionNMs.filter(nmHasActive);
     const withAllActive = regionNMs.filter(nmHasAllActive);
-    const extraCell = isPublic
-      ? `<td style="text-align:center">${fmt(withAllActive.length, regionNMs.length)}</td>`
-      : "";
+    const extraCell = isPublic ? `<td style="text-align:center">${fmt(withAllActive.length, regionNMs.length)}</td>` : "";
     return `<tr>
       <td style="font-weight:600;color:#34495e">${escHtml(grpName)} · ${escHtml(regionLabel)}</td>
       <td style="text-align:center">${mms.length} MMs → <b>${regionNMs.length}</b> NMs</td>
@@ -2179,9 +1988,7 @@ function renderNmMmSummary() {
   if (propFilter) activeData = activeData.filter(r=>(r["Property"]||"")===propFilter);
 
   const nmToMM = {};
-  hoods.forEach(h => {
-    if (h.nano_market && h.micro_market) nmToMM[h.nano_market] = h.micro_market;
-  });
+  hoods.forEach(h => { if (h.nano_market && h.micro_market) nmToMM[h.nano_market] = h.micro_market; });
 
   function buildGroupTable(groupKey, tableId) {
     const hoodField = groupKey === "NM" ? "nano_market" : "micro_market";
@@ -2194,26 +2001,18 @@ function renderNmMmSummary() {
       const gRows = activeData.filter(r => r[groupKey] === g);
       const cats = {};
       FIXED_CATEGORIES.forEach(c => { cats[c] = 0; });
-
       gRows.forEach(r => {
         const normalized = normalizeCategory(r.Category);
-        if (FIXED_CATEGORIES.includes(normalized)) {
-          cats[normalized] = (cats[normalized] || 0) + 1;
-        } else {
-          cats["Other"] = (cats["Other"] || 0) + 1;
-        }
+        if (FIXED_CATEGORIES.includes(normalized)) cats[normalized] = (cats[normalized] || 0) + 1;
+        else cats["Other"] = (cats["Other"] || 0) + 1;
       });
-
       const total = FIXED_CATEGORIES.reduce((sum, c) => sum + (cats[c] || 0), 0);
       const mm = groupKey === "NM" ? (nmToMM[g] || "") : "";
       return { group: g, mm, total, ...cats };
     });
 
     const knownGroups = new Set(groups);
-    const unmatchedRows = activeData.filter(r => {
-      const val = (r[groupKey] || "").trim();
-      return !val || !knownGroups.has(val);
-    });
+    const unmatchedRows = activeData.filter(r => { const val = (r[groupKey] || "").trim(); return !val || !knownGroups.has(val); });
 
     let unmatchedEntry = null;
     if (unmatchedRows.length > 0) {
@@ -2221,11 +2020,8 @@ function renderNmMmSummary() {
       FIXED_CATEGORIES.forEach(c => { cats[c] = 0; });
       unmatchedRows.forEach(r => {
         const normalized = normalizeCategory(r.Category);
-        if (FIXED_CATEGORIES.includes(normalized)) {
-          cats[normalized] = (cats[normalized] || 0) + 1;
-        } else {
-          cats["Other"] = (cats["Other"] || 0) + 1;
-        }
+        if (FIXED_CATEGORIES.includes(normalized)) cats[normalized] = (cats[normalized] || 0) + 1;
+        else cats["Other"] = (cats["Other"] || 0) + 1;
       });
       const total = FIXED_CATEGORIES.reduce((sum, c) => sum + (cats[c] || 0), 0);
       unmatchedEntry = { group: "⚠️ Unmatched / No Hood", mm: "—", total, ...cats };
@@ -2233,34 +2029,24 @@ function renderNmMmSummary() {
 
     const allEntries = unmatchedEntry ? [...tableData, unmatchedEntry] : tableData;
     const grandCats = {};
-    FIXED_CATEGORIES.forEach(c => {
-      grandCats[c] = allEntries.reduce((s, d) => s + (d[c] || 0), 0);
-    });
+    FIXED_CATEGORIES.forEach(c => { grandCats[c] = allEntries.reduce((s, d) => s + (d[c] || 0), 0); });
     const grandTotal = FIXED_CATEGORIES.reduce((sum, c) => sum + (grandCats[c] || 0), 0);
 
     const sortedData = ss.col
-      ? sortData(
-          tableData.map((d, i) => ({ ...d, _orig: i })),
-          {
-            col: ss.col === "Total Active" ? "total"
-               : (ss.col === "NM" || ss.col === "MM" || ss.col === "group") ? "group"
-               : ss.col,
-            dir: ss.dir
-          }
-        )
+      ? sortData(tableData.map((d, i) => ({ ...d, _orig: i })), {
+          col: ss.col === "Total Active" ? "total" : (ss.col === "NM" || ss.col === "MM" || ss.col === "group") ? "group" : ss.col,
+          dir: ss.dir
+        })
       : tableData;
 
     const displayData = unmatchedEntry ? [...sortedData, unmatchedEntry] : sortedData;
-
     const mmHeader = groupKey === "NM" ? `<th>MM</th>` : "";
     const mmFooterCell = groupKey === "NM" ? `<td></td>` : "";
 
     const rows = displayData.map((d, idx) => {
       const isUnmatched = d.group === "⚠️ Unmatched / No Hood";
       const rowStyle = isUnmatched ? `style="background:#fff8e1;color:#e65100"` : "";
-      const mmCell = groupKey === "NM"
-        ? `<td style="color:#888;font-size:11px">${escHtml(d.mm || "—")}</td>`
-        : "";
+      const mmCell = groupKey === "NM" ? `<td style="color:#888;font-size:11px">${escHtml(d.mm || "—")}</td>` : "";
       return `<tr ${rowStyle}>
         <td class="rn-cell">${isUnmatched ? "⚠" : idx + 1}</td>
         <td>${escHtml(d.group)}</td>
@@ -2271,8 +2057,7 @@ function renderNmMmSummary() {
     }).join("");
 
     const footerRow = `<tr style="background:#f0f4ff;font-weight:700;position:sticky;bottom:0">
-      <td class="rn-cell">Σ</td>
-      <td><b>Grand Total</b></td>
+      <td class="rn-cell">Σ</td><td><b>Grand Total</b></td>
       ${mmFooterCell}
       <td style="font-weight:800;color:#1a3a7a">${grandTotal}</td>
       ${FIXED_CATEGORIES.map(c => `<td style="color:#1a3a7a">${grandCats[c] || 0}</td>`).join("")}
@@ -2291,19 +2076,13 @@ function renderNmMmSummary() {
           </div>
         </div>`;
       }).join("");
-
       return `<div style="background:#fff3e0;border:1px solid #ffcc02;border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px">
-        <div style="font-weight:700;color:#e65100;margin-bottom:8px">
-          ⚠️ ${unmatchedEntry.total} propert${unmatchedEntry.total === 1 ? "y" : "ies"} not matched to any hood — showing their current NM/MM values:
-        </div>
-        <div style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
-          ${unmatchedNames}
-        </div>
+        <div style="font-weight:700;color:#e65100;margin-bottom:8px">⚠️ ${unmatchedEntry.total} propert${unmatchedEntry.total === 1 ? "y" : "ies"} not matched to any hood:</div>
+        <div style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">${unmatchedNames}</div>
       </div>`;
     })() : "";
 
     const sortBarId = `${tableId}_sortbar`;
-
     return `
       <div id="${sortBarId}"></div>
       <div class="nm-table-wrap" id="${tableId}_wrap">
@@ -2360,9 +2139,9 @@ function renderNmMmSummary() {
       </div>
       <hr class="wr-divider"/>
       <div class="washroom-resting-grid">
-        ${cardHtml(`${label}s without Washroom`,                noWashroom.length,  pct(noWashroom.length),  "#e53935", "#fff5f5", "noWashroom",  groupKey)}
-        ${cardHtml(`${label}s without Resting`,                 noResting.length,   pct(noResting.length),   "#ff9800", "#fffbf0", "noResting",   groupKey)}
-        ${cardHtml(`${label}s without Washroom & Resting`,      withNeither.length, pct(withNeither.length), "#546e7a", "#f4f6f7", "withNeither", groupKey)}
+        ${cardHtml(`${label}s without Washroom`,           noWashroom.length,  pct(noWashroom.length),  "#e53935", "#fff5f5", "noWashroom",  groupKey)}
+        ${cardHtml(`${label}s without Resting`,            noResting.length,   pct(noResting.length),   "#ff9800", "#fffbf0", "noResting",   groupKey)}
+        ${cardHtml(`${label}s without Washroom & Resting`, withNeither.length, pct(withNeither.length), "#546e7a", "#f4f6f7", "withNeither", groupKey)}
       </div>`;
 
     return { statsHtml, withWashroom, withResting, withBoth, noWashroom, noResting, withNeither, total, groups };
@@ -2476,10 +2255,23 @@ function getReminderStatus(row) {
   return null;
 }
 
+function populateReminderRegionFilter() {
+  const el = document.getElementById("reminderRegion");
+  if (!el) return;
+  const cur = el.value;
+  const regions = [...new Set(allData.map(r => (r.region || r.Region || "").toString().trim().toLowerCase()).filter(Boolean))].sort();
+  el.innerHTML = `<option value="">Region</option>` +
+    regions.map(r => `<option value="${r}">${r.charAt(0).toUpperCase() + r.slice(1)}</option>`).join("");
+  el.value = cur;
+  const wrap = document.getElementById("reminderRegionWrap");
+  if (wrap) wrap.style.display = (ACTIVE_REGION && ACTIVE_REGION !== "all") ? "none" : "";
+}
+
 function getReminderData() {
   const from = document.getElementById("reminderDateFrom")?.value;
   const to   = document.getElementById("reminderDateTo")?.value;
   const statusFilter = document.getElementById("reminderStatusFilter")?.value || "";
+  const regionFilter = document.getElementById("reminderRegion")?.value || "";
   const fromDate = from ? new Date(from + "T00:00:00") : null;
   const toDate   = to   ? new Date(to   + "T23:59:59") : null;
 
@@ -2488,6 +2280,10 @@ function getReminderData() {
     const reminderStatus = getReminderStatus(row);
     if (!reminderStatus) return false;
     if (statusFilter && reminderStatus !== statusFilter) return false;
+    if (regionFilter) {
+      const rowRegion = (row.region || row.Region || "").toString().trim().toLowerCase();
+      if (rowRegion !== regionFilter.toLowerCase()) return false;
+    }
     if (fromDate || toDate) {
       const ts = parseTimestamp(row["Timestamp"]);
       if (!ts) return false;
@@ -2522,7 +2318,6 @@ function renderReminderTable() {
   });
 
   data = sortData(data, getSortState("reminder"));
-
   if (countEl) countEl.textContent = `${data.length} rows`;
 
   if (!data.length) {
@@ -2555,8 +2350,12 @@ function applyReminderFilters() { renderReminderTable(); }
 
 function clearReminderFilters() {
   ["reminderDateFrom","reminderDateTo"].forEach(id => { const el=document.getElementById(id); if(el)el.value=""; });
-  const rs = document.getElementById("reminderStatusFilter");
-  if (rs) rs.value = "";
+  const rs = document.getElementById("reminderStatusFilter"); if (rs) rs.value = "";
+  const rr = document.getElementById("reminderRegion");
+  if (rr) {
+    if (ACTIVE_REGION && ACTIVE_REGION !== "all") rr.value = ACTIVE_REGION;
+    else rr.value = "";
+  }
   setSortState("reminder", null, "asc");
   renderReminderTable();
 }
@@ -2814,7 +2613,7 @@ function escHtml(str) {
 }
 
 // ============================================================
-// MARK CIRCLES MODE
+// MARK CIRCLES MODE — download only, no backend writes
 // ============================================================
 let markCirclesMode = false;
 let circlePoints = [];
@@ -2907,6 +2706,9 @@ function downloadCircleKML(radiusMeters, points) {
     <Style><LineStyle><color>ff0000ff</color><width>2</width></LineStyle><PolyStyle><color>${color}</color><outline>1</outline></PolyStyle></Style>
     <Polygon><outerBoundaryIs><LinearRing><coordinates>${generateCircleKmlCoords(p.lat,p.lng,radiusMeters)}</coordinates></LinearRing></outerBoundaryIs></Polygon>
   </Placemark>`).join("\n");
-  downloadBlob(`<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Circle Points — ${radiusMeters}m radius</name>${placemarks}</Document></kml>`,
-    `circle_points_${radiusMeters}m.kml`, "application/vnd.google-earth.kml+xml");
+  downloadBlob(
+    `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Circle Points — ${radiusMeters}m radius</name>${placemarks}</Document></kml>`,
+    `circle_points_${radiusMeters}m.kml`,
+    "application/vnd.google-earth.kml+xml"
+  );
 }

@@ -5,7 +5,7 @@
 const CONFIG = {
 
   // ── Main property sheet (Form Responses 1) ──────────────────
-  API_URL: "https://script.google.com/macros/s/AKfycbwWrWpI52IecmST4dDRXrYDeePWFH_GSCgk-q_4myRvQA8UQMTYT9f68GklnOIGXRI9/exec",
+  API_URL: "https://script.google.com/macros/s/AKfycbyN8R2CikuuCTZxp4kVjM0o8SNCSa5UIs3RH7NUpOMYk-BjTjd5qWrvYJ0exkI3J006UQ/exec",
 
   // ── Hotspots sheet ──────────────────────────────────────────
   HOTSPOT_URL: "https://script.google.com/macros/s/AKfycbwVBVyUxogZMVbIR_ybi9zMOdBftWUwyU5_E6oXDZw0PpUlVrJvKzjgLu9WeqFRuVQe/exec",
