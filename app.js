@@ -22,7 +22,7 @@ let demandData    = [];
 let idleData      = [];
 let centroidData  = [];
 
-let hoodExpertData = []; // from Hood Experts Count subsheet
+let hoodExpertData = [];
 const HOOD_EXPERTS_SOURCE = "hood-experts-source";
 const HOOD_EXPERTS_FILL = "hood-experts-fill";
 
@@ -33,7 +33,7 @@ const layerVisible = {
   demand:      false,
   idle:        false,
   centroids:   true,
-  hoodExperts: false,  // NEW
+  hoodExperts: false,
 };
 const MAP_STYLES = {
   street: "https://tiles.openfreemap.org/styles/liberty",
@@ -52,6 +52,35 @@ const IDLE_LAYER    = "idle-heat";
 const HOODS_SOURCE  = "hoods-source";
 const HOODS_FILL    = "hoods-fill";
 const HOODS_LINE    = "hoods-line";
+
+// ── Active region (set from region-select page) ──────────────
+// Read from sessionStorage; falls back to "all" if not set
+const ACTIVE_REGION = (function () {
+  try {
+    return (sessionStorage.getItem("selectedRegion") || "all").trim().toLowerCase();
+  } catch (e) {
+    return "all";
+  }
+})();
+
+// ── Region default map centres ────────────────────────────────
+const REGION_CENTRES = {
+  bangalore: { center: [77.65,  12.92], zoom: 12 },
+  hyderabad: { center: [78.48,  17.39], zoom: 12 },
+  noida:     { center: [77.39,  28.63], zoom: 12 },
+  delhi:     { center: [77.21,  28.61], zoom: 11 },
+  mumbai:    { center: [72.87,  19.08], zoom: 12 },
+  pune:      { center: [73.85,  18.52], zoom: 12 },
+  chennai:   { center: [80.27,  13.08], zoom: 12 },
+};
+const DEFAULT_MAP_VIEW = { center: [77.65, 12.9], zoom: 12 };
+
+// ── Filter rows by the active region ─────────────────────────
+function passesRegionFilter(row) {
+  if (!ACTIVE_REGION || ACTIVE_REGION === "all") return true;
+  const r = (row.region || row.Region || "").toString().trim().toLowerCase();
+  return r === ACTIVE_REGION;
+}
 
 // ============================================================
 // SORT UTILITY
@@ -110,33 +139,85 @@ function setSortState(key, col, dir) {
   sortStates[key] = { col: col || null, dir: dir || "asc" };
 }
 
-console.log("🚀 App initializing...");
+console.log("🚀 App initializing — region:", ACTIVE_REGION);
+injectRegionBanner();
 init();
+
+// ============================================================
+// REGION BANNER
+// Injects a small persistent banner showing the active region
+// and a link back to the region-select page.
+// ============================================================
+function injectRegionBanner() {
+  if (document.getElementById("regionBanner")) return;
+
+  const regionLabel = ACTIVE_REGION === "all"
+    ? "All Regions"
+    : ACTIVE_REGION.charAt(0).toUpperCase() + ACTIVE_REGION.slice(1);
+
+  const REGION_COLORS = {
+    bangalore: "#3b82f6", hyderabad: "#8b5cf6", noida: "#10b981",
+    delhi: "#f59e0b", mumbai: "#ef4444", pune: "#06b6d4", chennai: "#84cc16",
+    all: "#f0c040",
+  };
+  const color = REGION_COLORS[ACTIVE_REGION] || "#f0c040";
+
+  const banner = document.createElement("div");
+  banner.id = "regionBanner";
+  banner.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: ${color}18;
+    border-bottom: 1.5px solid ${color}55;
+    padding: 6px 16px;
+    display: flex; align-items: center; gap: 10px;
+    font-family: inherit; font-size: 12px; font-weight: 600;
+    color: ${color}; backdrop-filter: blur(4px);
+    pointer-events: auto;
+  `;
+  banner.innerHTML = `
+    <span style="font-size:14px">📍</span>
+    <span>Region: <b>${escHtml(regionLabel)}</b></span>
+    <span style="margin-left:auto">
+      <a href="index.html"
+         style="color:${color};text-decoration:underline;font-size:11px;cursor:pointer;font-weight:700">
+        ⇄ Switch Region
+      </a>
+    </span>`;
+  document.body.prepend(banner);
+
+  // Nudge page body down so banner doesn't cover content
+  document.body.style.paddingTop = "30px";
+}
 
 // ============================================================
 // INIT
 // ============================================================
 async function init() {
+  const mapView = REGION_CENTRES[ACTIVE_REGION] || DEFAULT_MAP_VIEW;
+
   map = new maplibregl.Map({
     container: "map",
     style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-    center: [77.65, 12.9],
-    zoom: 12,
+    center: mapView.center,
+    zoom: mapView.zoom,
     attributionControl: true
   });
 
   await new Promise(resolve => map.on("load", resolve));
 
-  hoods = await fetch(CONFIG.API_URL + "?action=getHoods&t=" + Date.now(), {
+  // Load all hoods, then filter to active region
+  const allHoods = await fetch(CONFIG.API_URL + "?action=getHoods&t=" + Date.now(), {
     credentials: "omit"
   }).then(r => r.json()).catch(() => ([]));
 
-  if (!Array.isArray(hoods) || hoods.error) {
+  if (!Array.isArray(allHoods) || allHoods.error) {
     console.error("❌ Failed to load hoods from sheet, trying hoods.json");
-    hoods = await fetch("hoods.json").then(r => r.json()).catch(() => []);
-    console.log(`📦 hoods.json loaded — ${hoods.length} hoods`);
+    const jsonHoods = await fetch("hoods.json").then(r => r.json()).catch(() => []);
+    hoods = filterHoodsByRegion(jsonHoods);
+    console.log(`📦 hoods.json loaded — ${hoods.length} hoods (region: ${ACTIVE_REGION})`);
   } else {
-    console.log(`📦 hoods loaded from sheet — ${hoods.length} hoods`);
+    hoods = filterHoodsByRegion(allHoods);
+    console.log(`📦 hoods loaded from sheet — ${hoods.length} hoods (region: ${ACTIVE_REGION})`);
   }
 
   drawHoods();
@@ -186,6 +267,14 @@ async function init() {
   });
   map.on("mouseenter", HOODS_FILL, () => map.getCanvas().style.cursor = "pointer");
   map.on("mouseleave", HOODS_FILL, () => map.getCanvas().style.cursor = "");
+}
+
+// ── Filter hoods to the active region ────────────────────────
+function filterHoodsByRegion(hoodsArr) {
+  if (!ACTIVE_REGION || ACTIVE_REGION === "all") return hoodsArr;
+  return hoodsArr.filter(h =>
+    (h.region || "").toString().trim().toLowerCase() === ACTIVE_REGION
+  );
 }
 
 function switchBaseMap(styleKey, event) {
@@ -334,7 +423,7 @@ function toggleLayer(key) {
 // EXTRA LAYERS
 // ============================================================
 async function loadExtraLayers() {
-  console.log("📡 loadExtraLayers()");
+  console.log("📡 loadExtraLayers() — region:", ACTIVE_REGION);
   await Promise.all([
     loadLayer(CONFIG.HOTSPOT_URL,  "hotspots",  renderHotspots),
     loadLayer(CONFIG.DEMAND_URL,   "demand",    renderDemand),
@@ -349,11 +438,26 @@ async function loadLayer(url, name, renderFn) {
   try {
     const res  = await fetch(url + "?t=" + Date.now());
     const data = await res.json();
-    console.log(`✅ ${name}: ${data.length} rows`);
-    renderFn(data);
+    // Filter by region if the data has a "region" column
+    const filtered = filterByRegionIfPresent(data);
+    console.log(`✅ ${name}: ${filtered.length} rows (of ${data.length}) for region: ${ACTIVE_REGION}`);
+    renderFn(filtered);
   } catch (err) {
     console.error(`❌ Failed to load ${name}:`, err);
   }
+}
+
+// ── Utility: filter array by region if rows have a region field ──
+function filterByRegionIfPresent(arr) {
+  if (!ACTIVE_REGION || ACTIVE_REGION === "all") return arr;
+  if (!Array.isArray(arr) || !arr.length) return arr;
+  const sample = arr[0];
+  const hasRegion = Object.keys(sample).some(k => k.toLowerCase() === "region");
+  if (!hasRegion) return arr; // no region column — return all
+  return arr.filter(row => {
+    const r = (row.region || row.Region || "").toString().trim().toLowerCase();
+    return r === ACTIVE_REGION || r === "";
+  });
 }
 
 function stampHoodInfo(rows, latKey, lngKey) {
@@ -398,7 +502,6 @@ function renderHotspots(data) {
     const lat = parseFloat(row.lat), lng = parseFloat(row.lng);
     if (isNaN(lat) || isNaN(lng)) return;
 
-    // Build rich popup with expert data if available
     const popupEl = document.createElement("div");
     popupEl.innerHTML = buildHotspotPopupHtml(row);
 
@@ -406,7 +509,6 @@ function renderHotspots(data) {
       .setDOMContent(popupEl);
 
     const m = createLetterMarker(lat, lng, "H", "#f39c12", "", row);
-    // Replace the simple HTML popup with our rich DOM popup
     m.setPopup(popup);
 
     if (layerVisible.hotspots && passesNMMFilter(row)) m.addTo(map);
@@ -419,12 +521,10 @@ function buildHotspotPopupHtml(row) {
   const hsName     = row.name || "Hotspot";
   const hsNameNorm = hsName.trim().toLowerCase();
 
-  // Match expert rows by hotspot name
   const expertRows = hoodExpertData.filter(r =>
     r.hotspot_name && r.hotspot_name.trim().toLowerCase() === hsNameNorm
   );
 
-  // Most recent date range
   const sorted    = [...expertRows].sort((a, b) => String(b.date_range || "").localeCompare(String(a.date_range || "")));
   const latest    = sorted[0];
   const dateRange = latest?.date_range || "";
@@ -480,6 +580,7 @@ function buildHotspotPopupHtml(row) {
       ${expertBlock}
     </div>`;
 }
+
 function renderDemand(data) {
   demandData = data;
   stampHoodInfo(data, "lat", "lng");
@@ -544,8 +645,9 @@ async function loadHoodExpertData() {
       console.warn("⚠️ Hood experts data not available or error:", data);
       return;
     }
-    hoodExpertData = data;
-    console.log(`✅ hoodExperts: ${data.length} rows`);
+    // Filter by region
+    hoodExpertData = filterByRegionIfPresent(data);
+    console.log(`✅ hoodExperts: ${hoodExpertData.length} rows (region: ${ACTIVE_REGION})`);
     drawHoodExpertsLayer();
   } catch (err) {
     console.error("❌ Failed to load hood expert data:", err);
@@ -553,7 +655,6 @@ async function loadHoodExpertData() {
 }
 
 function getHoodExpertInfo(hoodId) {
-  // Returns array of rows for this hood_id (may span multiple date ranges / hotspots)
   return hoodExpertData.filter(r => String(r.hood_id) === String(hoodId));
 }
 
@@ -563,7 +664,6 @@ function buildHoodExpertPopupHtml(hoodId, hoodName) {
     return `<div style="min-width:220px"><b>📊 ${escHtml(hoodName || hoodId)}</b><br><span style="color:#aaa;font-size:12px">No expert data available</span></div>`;
   }
 
-  // Use most recent date range
   const sorted = [...rows].sort((a, b) => String(b.date_range || "").localeCompare(String(a.date_range || "")));
   const dateRange = sorted[0]?.date_range || "";
   const hoodRows  = sorted.filter(r => r.date_range === dateRange);
@@ -573,7 +673,6 @@ function buildHoodExpertPopupHtml(hoodId, hoodName) {
   const avgDemHood      = parseFloat(hoodRef.avg_daily_demand_hood)                || 0;
   const avgIdleMinHood  = parseFloat(hoodRef.avg_daily_idle_min_per_expert_hood)   || 0;
 
-  // Hotspot sub-rows (rows that have a hotspot_name)
   const hotspotRows = hoodRows.filter(r => r.hotspot_name && r.hotspot_name.trim());
 
   const hotspotHtml = hotspotRows.length ? `
@@ -616,10 +715,8 @@ function buildHoodExpertPopupHtml(hoodId, hoodName) {
 }
 
 function drawHoodExpertsLayer() {
-  // Colour hoods by expert count using a choropleth fill
   if (!hoods.length) return;
 
-  // Build a lookup: hood_id → avg_daily_experts_hood (latest date range)
   const expertByHood = {};
   hoodExpertData.forEach(r => {
     const id = String(r.hood_id);
@@ -628,7 +725,6 @@ function drawHoodExpertsLayer() {
     }
   });
 
-  // Inject expert count into hood features as a property
   const features = hoods
     .filter(h => h.geometry)
     .map(h => {
@@ -670,7 +766,6 @@ function drawHoodExpertsLayer() {
       }
     });
 
-    // Hood experts click popup
     map.on("click", HOOD_EXPERTS_FILL, function (e) {
       const props   = e.features[0]?.properties || {};
       const hoodId  = props.hood_id;
@@ -733,14 +828,19 @@ function getFilteredCentroids() { return centroidData.filter(passesNMMFilter);  
 // MAIN DATA LOADING
 // ============================================================
 async function loadData() {
-  const url = CONFIG.API_URL + "?t=" + Date.now();
+  // Append region param so Apps Script can pre-filter server-side if desired
+  const regionParam = ACTIVE_REGION && ACTIVE_REGION !== "all"
+    ? `&region=${encodeURIComponent(ACTIVE_REGION)}`
+    : "";
+  const url = CONFIG.API_URL + "?t=" + Date.now() + regionParam;
   console.log("📡 loadData() —", url);
   try {
     const res  = await fetch(url);
     const text = await res.text();
     const data = JSON.parse(text);
-    allData = data;
-    console.log(`✅ ${allData.length} rows loaded`);
+    // Client-side region filter as safety net
+    allData = filterByRegionIfPresent(data);
+    console.log(`✅ ${allData.length} rows loaded (of ${data.length}) for region: ${ACTIVE_REGION}`);
 
     if (Object.values(activeFilters).some(v => v)) {
       filterAndRender();
@@ -785,7 +885,7 @@ async function recalculateHotspots() {
       return fetch(CONFIG.API_URL, { method: "POST", mode: "no-cors", credentials: "omit", body: JSON.stringify(payload) });
     });
     await Promise.all(writes);
-    allData = data;
+    allData = filterByRegionIfPresent(data);
     if (statusEl) { statusEl.textContent = `✅ Done — ${data.length} rows enriched and saved.`; statusEl.style.color = "#27ae60"; }
     renderMarkers();
     renderSheetPreview(allData);
@@ -1007,17 +1107,26 @@ function closeAddPointModal() {
 async function submitAddPoint() {
   const lat = document.getElementById("ap_Lat").value;
   const lng = document.getElementById("ap_Long").value;
-  const newRow = { "Lat": parseFloat(lat), "Long": parseFloat(lng) };
+  const newRow = {
+    "Lat":    parseFloat(lat),
+    "Long":   parseFloat(lng),
+    "region": ACTIVE_REGION !== "all" ? ACTIVE_REGION : ""  // stamp region
+  };
   ADD_POINT_FIELDS.forEach(f => {
     const el = document.getElementById("ap_" + f.key.replace(/[\s.()/]/g,'_'));
     if (el && el.value.trim()) newRow[f.key] = f.type === "number" ? parseFloat(el.value) : el.value.trim();
   });
   const hood = assignHood({ lat: parseFloat(lat), lng: parseFloat(lng) });
-  if (hood) { newRow.NM = hood.nano_market; newRow.MM = hood.micro_market; newRow["NM Id"] = hood.hood_id; }
+  if (hood) {
+    newRow.NM = hood.nano_market;
+    newRow.MM = hood.micro_market;
+    newRow["NM Id"] = hood.hood_id;
+    if (!newRow.region && hood.region) newRow.region = hood.region;
+  }
   try {
     const res  = await fetch(CONFIG.API_URL, { method: "POST", body: JSON.stringify(newRow) });
     const json = await res.json();
-    if (json.success) { alert(`✅ Point added\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}`); closeAddPointModal(); loadData(); }
+    if (json.success) { alert(`✅ Point added\nNM: ${newRow.NM || "-"}, MM: ${newRow.MM || "-"}, Region: ${newRow.region || "-"}`); closeAddPointModal(); loadData(); }
     else alert("❌ Failed: " + JSON.stringify(json));
   } catch (err) { alert("❌ Error: " + err.message); }
 }
@@ -1082,11 +1191,11 @@ function geometryToKmlGeometry(geometry) {
 function escXml(str) { return String(str||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 function hoodsToKml(hoodList,layerName,color="7f0000ff"){
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${hoodList.map(h=>`<Placemark><n>${escXml(h.nano_market||h.micro_market||h.hood_id)}</n><description><![CDATA[NM: ${h.nano_market||""}<br>MM: ${h.micro_market||""}<br>ID: ${h.hood_id||""}]]></description><Style><PolyStyle><color>${color}</color><outline>1</outline></PolyStyle></Style>${geometryToKmlGeometry(h.geometry)}</Placemark>`).join("\n")}\n</Document></kml>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${hoodList.map(h=>`<Placemark><n>${escXml(h.nano_market||h.micro_market||h.hood_id)}</n><description><![CDATA[NM: ${h.nano_market||""}<br>MM: ${h.micro_market||""}<br>ID: ${h.hood_id||""}<br>Region: ${h.region||""}]]></description><Style><PolyStyle><color>${color}</color><outline>1</outline></PolyStyle></Style>${geometryToKmlGeometry(h.geometry)}</Placemark>`).join("\n")}\n</Document></kml>`;
 }
 
 function pointsToKml(data,layerName){
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${data.filter(row=>!isNaN(parseFloat(row.Lat))&&!isNaN(parseFloat(row.Long))).map(row=>`<Placemark><n>${escXml(getPropertyName(row))}</n><description><![CDATA[Category: ${row.Category||""}<br>NM: ${row.NM||""}<br>MM: ${row.MM||""}<br>Road: ${row.Road||""}<br>Status: ${row["Final Status"]||""}]]></description><Point><coordinates>${parseFloat(row.Long)},${parseFloat(row.Lat)},0</coordinates></Point></Placemark>`).join("\n")}\n</Document></kml>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><n>${escXml(layerName)}</n>\n${data.filter(row=>!isNaN(parseFloat(row.Lat))&&!isNaN(parseFloat(row.Long))).map(row=>`<Placemark><n>${escXml(getPropertyName(row))}</n><description><![CDATA[Category: ${row.Category||""}<br>NM: ${row.NM||""}<br>MM: ${row.MM||""}<br>Road: ${row.Road||""}<br>Status: ${row["Final Status"]||""}<br>Region: ${row.region||""}]]></description><Point><coordinates>${parseFloat(row.Long)},${parseFloat(row.Lat)},0</coordinates></Point></Placemark>`).join("\n")}\n</Document></kml>`;
 }
 
 function geometryToWkt(geometry){
@@ -1097,11 +1206,11 @@ function geometryToWkt(geometry){
 }
 
 function hoodsToCsvWkt(hoodList,nameField){
-  return["WKT,name,nm,mm,hood_id",...hoodList.map(h=>[`"${geometryToWkt(h.geometry)}"`,`"${h[nameField]||h.nano_market||h.micro_market||""}"`,`"${h.nano_market||""}"`,`"${h.micro_market||""}"`,`"${h.hood_id||""}"`].join(","))].join("\n");
+  return["WKT,name,nm,mm,hood_id,region",...hoodList.map(h=>[`"${geometryToWkt(h.geometry)}"`,`"${h[nameField]||h.nano_market||h.micro_market||""}"`,`"${h.nano_market||""}"`,`"${h.micro_market||""}"`,`"${h.hood_id||""}"`,`"${h.region||""}"`].join(","))].join("\n");
 }
 
 function pointsToCsvWkt(data){
-  return["WKT,name,category,nm,mm,road,final_status,lat,long",...data.filter(row=>!isNaN(parseFloat(row.Lat))&&!isNaN(parseFloat(row.Long))).map(row=>{const lat=parseFloat(row.Lat),lng=parseFloat(row.Long);return[`"POINT(${lng} ${lat})"`,`"${getPropertyName(row).replace(/"/g,'""')}"`,`"${row.Category||""}"`,`"${row.NM||""}"`,`"${row.MM||""}"`,`"${(row.Road||"").replace(/"/g,'""')}"`,`"${row["Final Status"]||""}"`,lat,lng].join(",");})].join("\n");
+  return["WKT,name,category,nm,mm,road,final_status,lat,long,region",...data.filter(row=>!isNaN(parseFloat(row.Lat))&&!isNaN(parseFloat(row.Long))).map(row=>{const lat=parseFloat(row.Lat),lng=parseFloat(row.Long);return[`"POINT(${lng} ${lat})"`,`"${getPropertyName(row).replace(/"/g,'""')}"`,`"${row.Category||""}"`,`"${row.NM||""}"`,`"${row.MM||""}"`,`"${(row.Road||"").replace(/"/g,'""')}"`,`"${row["Final Status"]||""}"`,lat,lng,`"${row.region||""}"`].join(",");})].join("\n");
 }
 
 function downloadBlob(content,filename,mimeType){
@@ -1116,7 +1225,7 @@ function downloadLayerKML(type) {
   const filteredData = getFilteredData();
   const nmVal = activeFilters.NM || "";
   const mmVal = activeFilters.MM || "";
-  const label = nmVal || mmVal || "filtered";
+  const label = nmVal || mmVal || ACTIVE_REGION || "filtered";
 
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
@@ -1136,7 +1245,7 @@ function downloadLayerCSV(type) {
   const filteredData = getFilteredData();
   const nmVal = activeFilters.NM || "";
   const mmVal = activeFilters.MM || "";
-  const label = nmVal || mmVal || "filtered";
+  const label = nmVal || mmVal || ACTIVE_REGION || "filtered";
 
   if (type === "nm") {
     const hoodList = hoodsByNM(getFilteredNMs());
@@ -1162,7 +1271,7 @@ function extraLayerToKml(rows,latKey,lngKey,layerName,popupFn){
 }
 
 function downloadExtraLayer(layerType,format){
-  const label=(activeFilters.NM||[]).join("_")||(activeFilters.MM||[]).join("_")||"all";
+  const label=ACTIVE_REGION||"all";
   if(layerType==="hotspots"){const data=getFilteredHotspots();if(!data.length){alert("No hotspot data.");return;}if(format==="csv")downloadBlob(extraLayerToCsvWkt(data,"lat","lng",["name","hood","cluster"]),`hotspots_${label}.csv`,"text/csv");else downloadBlob(extraLayerToKml(data,"lat","lng",`Hotspots — ${label}`,r=>`Hood: ${r.hood||"-"}<br>Cluster: ${r.cluster||"-"}<br>NM: ${r._nm||"-"}<br>MM: ${r._mm||"-"}`),`hotspots_${label}.kml`,"application/vnd.google-earth.kml+xml");}
   else if(layerType==="demand"){const data=getFilteredDemand();if(!data.length){alert("No demand data.");return;}if(format==="csv")downloadBlob(extraLayerToCsvWkt(data,"lat","lng",["cluster","orders"]),`demand_${label}.csv`,"text/csv");else downloadBlob(extraLayerToKml(data,"lat","lng",`Demand — ${label}`,r=>`Cluster: ${r.cluster||"-"}<br>Orders: ${r.orders||"-"}<br>NM: ${r._nm||"-"}<br>MM: ${r._mm||"-"}`),`demand_${label}.kml`,"application/vnd.google-earth.kml+xml");}
   else if(layerType==="idle"){const data=getFilteredIdle();if(!data.length){alert("No idle data.");return;}if(format==="csv")downloadBlob(extraLayerToCsvWkt(data,"lat","lng",["cluster","hood","idle_min","w","hood_pings"]),`idle_${label}.csv`,"text/csv");else downloadBlob(extraLayerToKml(data,"lat","lng",`Idle — ${label}`,r=>`Cluster: ${r.cluster||"-"}<br>Hood: ${r.hood||"-"}<br>Idle min: ${r.idle_min||"-"}<br>NM: ${r._nm||"-"}<br>MM: ${r._mm||"-"}`),`idle_${label}.kml`,"application/vnd.google-earth.kml+xml");}
@@ -1386,8 +1495,8 @@ function getSheetFilteredData() {
   });
 }
 
-function applySheetFilters() { 
-  renderSheetPreview(getSheetFilteredData()); 
+function applySheetFilters() {
+  renderSheetPreview(getSheetFilteredData());
 }
 
 function clearSheetFilters() {
@@ -1439,7 +1548,7 @@ function renderSheetPreview(data) {
     "Photo 1 (Image Upload) (From Road)",
     "Photo 2 (Image Upload) (Sitting Area)",
     "Photo 3 (Image Upload)","Agreement Photo (Image Upload)",
-    "Lead Status","Final Status"
+    "Lead Status","Final Status","region"
   ];
   const availableCols = data.length ? previewCols.filter(c => data[0].hasOwnProperty(c)) : previewCols;
 
@@ -1511,7 +1620,6 @@ function downloadSheetPreviewCSV() {
 
 // ============================================================
 // CROSS-TAB SUMMARY TABLE
-// FIX: cells with a non-zero value get a light green background
 // ============================================================
 function getSummaryFilters() {
   return {
@@ -1553,8 +1661,8 @@ function populateSummaryFilters() {
   });
 }
 
-function applySummaryFilters() { 
-  renderSummaryTables(); 
+function applySummaryFilters() {
+  renderSummaryTables();
 }
 
 function clearSummaryFilters() {
@@ -1564,7 +1672,6 @@ function clearSummaryFilters() {
   renderSummaryTables();
 }
 
-// Helper: renders a <td> with light green background when value > 0, plain otherwise
 function greenCatCell(val) {
   const n = val || 0;
   return n > 0
@@ -1572,7 +1679,6 @@ function greenCatCell(val) {
     : `<td>${n}</td>`;
 }
 
-// Helper: renders a total <td> with light green when count > 0
 function greenTotalCell(n) {
   return n > 0
     ? `<td style="background:#e8f8f0;color:#1a7a4a;font-weight:700">${n}</td>`
@@ -1881,7 +1987,7 @@ function clearIncentiveFilters() {
 
 // ============================================================
 // BANGALORE OVERVIEW
-// FIX: removed uniqueByName() deduplication — counts use raw active rows
+// (now region-aware: shows the current region label instead of hardcoding "Bangalore")
 // ============================================================
 function fuzzyScore(str,query){
   if(!str||!query)return 0;
@@ -1897,20 +2003,44 @@ function fuzzyScore(str,query){
 
 function fuzzyMatch(str,query){return fuzzyScore(str,query)>=0.5;}
 
-const BANGALORE_REGION_MMS = {
-  "Mid Belt":["bellandur","brookefield","hoodi","kudlu","mahadevapura","marathahalli","munnekollal","sarjapur","whitefield 1","whitefield 2","whitefield 3","hsr","indiranagar","koramangala","varthur"],
-  "South":["hongasandra","hulimavu","nagasandra","singasandra","tejaswini nagar","rayasandra","electronic city 1","electronic city 2"],
-  "North":["hebbal","thannisandra","yelahanka","yeswanthpur","segehalli"]
+// Region-specific MM groupings — extend as you add more cities
+const REGION_MM_GROUPS = {
+  bangalore: {
+    "Mid Belt":["bellandur","brookefield","hoodi","kudlu","mahadevapura","marathahalli","munnekollal","sarjapur","whitefield 1","whitefield 2","whitefield 3","hsr","indiranagar","koramangala","varthur"],
+    "South":   ["hongasandra","hulimavu","nagasandra","singasandra","tejaswini nagar","rayasandra","electronic city 1","electronic city 2"],
+    "North":   ["hebbal","thannisandra","yelahanka","yeswanthpur","segehalli"],
+  },
+  hyderabad: {
+    "West":    ["kukatpally","hitech city","madhapur","gachibowli","kondapur"],
+    "East":    ["uppal","lb nagar","dilsukhnagar","hayathnagar"],
+    "Central": ["ameerpet","sr nagar","secunderabad","begumpet"],
+  },
+  noida: {
+    "Greater Noida": ["gaur city 2","gaur city 1","noida extension","greater noida west"],
+    "Expressway":    ["sector 137","sector 150","sector 168","techzone 4"],
+    "Old Noida":     ["sector 62","sector 63","sector 18","sector 15"],
+  },
 };
 
+// Fallback: group all MMs under a single group named after the region
 function buildRegionMaps() {
   const allHoodMMs=[...new Set(hoods.map(h=>h.micro_market).filter(Boolean))];
-  const result={source:"fuzzy_mm","Mid Belt":[],"North":[],"South":[]};
-  const unmatched=[];
-  allHoodMMs.forEach(mm=>{
+  const groups = REGION_MM_GROUPS[ACTIVE_REGION];
+
+  if (!groups) {
+    // No known grouping — put all MMs in one bucket named after the region
+    const label = ACTIVE_REGION === "all" ? "All" : (ACTIVE_REGION.charAt(0).toUpperCase() + ACTIVE_REGION.slice(1));
+    return { source: "all_mms", [label]: allHoodMMs };
+  }
+
+  const result = { source: "fuzzy_mm" };
+  Object.keys(groups).forEach(g => result[g] = []);
+  const unmatched = [];
+
+  allHoodMMs.forEach(mm => {
     let bestRegion=null,bestScore=0;
-    for(const[region,knownMMs]of Object.entries(BANGALORE_REGION_MMS)){
-      for(const known of knownMMs){const score=fuzzyScore(mm,known);if(score>bestScore){bestScore=score;bestRegion=region;}}
+    for(const[grp,knownMMs]of Object.entries(groups)){
+      for(const known of knownMMs){const score=fuzzyScore(mm,known);if(score>bestScore){bestScore=score;bestRegion=grp;}}
     }
     if(bestScore>=0.5)result[bestRegion].push(mm);
     else unmatched.push(mm);
@@ -1953,20 +2083,23 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
   const launchedToday = launchScopeActive.filter(r => isToday(r["Launch date"])).length;
   const launchedTotal = launchScopeActive.length;
 
-  const blrMMs = [...new Set([...regionMaps["Mid Belt"], ...regionMaps["North"], ...regionMaps["South"]])];
-  const blrNMs = nmsForMMs(blrMMs);
-  const blrTotal = blrNMs.length;
-  const blrWithActive = blrNMs.filter(nmHasActive);
-  const blrWithAllActive = blrNMs.filter(nmHasAllActive);
-  const blrWithWashroom = blrNMs.filter(nmHasWashroom);
-  const blrWithResting = blrNMs.filter(nmHasResting);
-  const blrWithBoth = blrNMs.filter(nm => nmHasWashroom(nm) && nmHasResting(nm));
+  // Build full region NMs from all groups
+  const subGroups = Object.keys(regionMaps).filter(k => k !== "source");
+  const allMMs = [...new Set(subGroups.flatMap(g => regionMaps[g] || []))];
+  const allNMs = nmsForMMs(allMMs);
+  const blrTotal = allNMs.length;
+  const blrWithActive = allNMs.filter(nmHasActive);
+  const blrWithAllActive = allNMs.filter(nmHasAllActive);
+  const blrWithWashroom = allNMs.filter(nmHasWashroom);
+  const blrWithResting  = allNMs.filter(nmHasResting);
+  const blrWithBoth     = allNMs.filter(nm => nmHasWashroom(nm) && nmHasResting(nm));
 
+  const regionLabel = ACTIVE_REGION === "all" ? "All" : (ACTIVE_REGION.charAt(0).toUpperCase() + ACTIVE_REGION.slice(1));
   const coverageLabel = propertyType === "All" ? "All Active" : `${propertyType} Active`;
   const isPublic = propertyType === "Public";
 
-  function regionRow(regionName) {
-    const mms = regionMaps[regionName] || [];
+  function regionRow(grpName) {
+    const mms = regionMaps[grpName] || [];
     const regionNMs = nmsForMMs(mms);
     const withActive = regionNMs.filter(nmHasActive);
     const withAllActive = regionNMs.filter(nmHasAllActive);
@@ -1974,7 +2107,7 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
       ? `<td style="text-align:center">${fmt(withAllActive.length, regionNMs.length)}</td>`
       : "";
     return `<tr>
-      <td style="font-weight:600;color:#34495e">${escHtml(regionName)} Bangalore</td>
+      <td style="font-weight:600;color:#34495e">${escHtml(grpName)} · ${escHtml(regionLabel)}</td>
       <td style="text-align:center">${mms.length} MMs → <b>${regionNMs.length}</b> NMs</td>
       <td style="text-align:center">${fmt(withActive.length, regionNMs.length)}</td>
       ${extraCell}
@@ -1988,39 +2121,36 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
       ${sub ? `<div style="font-size:11px;color:#999;margin-top:3px">${sub}</div>` : ""}
     </div>`;
 
-  const sourceNote = `<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">fuzzy MM match</span>`;
+  const sourceNote = regionMaps.source === "fuzzy_mm"
+    ? `<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">fuzzy MM match</span>`
+    : `<span style="background:#e8f4fd;color:#1a5276;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:8px">${escHtml(regionLabel)} hoods</span>`;
 
-  // Extra header + BLR row cell for Public only
-  const extraHeader = isPublic
-    ? `<th>${escHtml("NMs with All Active Property")}</th>`
-    : "";
-  const extraBlrCell = isPublic
-    ? `<td style="text-align:center">${fmt(blrWithAllActive.length, blrTotal)}</td>`
-    : "";
+  const extraHeader = isPublic ? `<th>${escHtml("NMs with All Active Property")}</th>` : "";
+  const extraBlrCell = isPublic ? `<td style="text-align:center">${fmt(blrWithAllActive.length, blrTotal)}</td>` : "";
 
   return `
     <div style="margin-bottom:20px">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">📍 NM Coverage — ${coverageLabel} Properties ${sourceNote}</div>
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">📍 NM Coverage — ${coverageLabel} Properties · ${escHtml(regionLabel)} ${sourceNote}</div>
       <div style="overflow-x:auto"><table class="summary-table" style="max-width:${isPublic ? "780px" : "620px"}">
         <thead><tr>
-          <th style="text-align:left">Region</th>
+          <th style="text-align:left">Sub-region</th>
           <th>MMs / NMs</th>
           <th>${escHtml(`NMs with ${coverageLabel} Property`)}</th>
           ${extraHeader}
         </tr></thead>
         <tbody>
           <tr style="background:#f0f4ff">
-            <td style="font-weight:700;color:#1a237e">🏙️ Bangalore (all)</td>
-            <td style="text-align:center">${blrMMs.length} MMs → <b>${blrTotal}</b> NMs</td>
+            <td style="font-weight:700;color:#1a237e">🏙️ ${escHtml(regionLabel)} (all)</td>
+            <td style="text-align:center">${allMMs.length} MMs → <b>${blrTotal}</b> NMs</td>
             <td style="text-align:center">${fmt(blrWithActive.length, blrTotal)}</td>
             ${extraBlrCell}
           </tr>
-          ${["Mid Belt", "North", "South"].map(r => regionRow(r)).join("")}
+          ${subGroups.map(g => regionRow(g)).join("")}
         </tbody>
       </table></div>
     </div>
     <div style="margin-bottom:20px">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">🚿 Bangalore NM — Closure Coverage · ${coverageLabel} · (${blrTotal} NMs)</div>
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#555;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid #eee">🚿 ${escHtml(regionLabel)} NM — Closure Coverage · ${coverageLabel} · (${blrTotal} NMs)</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         ${tile("🚿", "NMs with Washroom", `${blrWithWashroom.length} / ${blrTotal}`, pct(blrWithWashroom.length, blrTotal), "#2196f3")}
         ${tile("🛋️", "NMs with Resting", `${blrWithResting.length} / ${blrTotal}`, pct(blrWithResting.length, blrTotal), "#4caf50")}
@@ -2034,6 +2164,7 @@ function buildBangaloreOverviewHTML(propertyType, regionMaps) {
       </div>
     </div>`;
 }
+
 // ============================================================
 // NM / MM SUMMARY
 // ============================================================
@@ -2047,7 +2178,6 @@ function renderNmMmSummary() {
   let activeData = allData.filter(r => (r["App status"]||"").trim()==="Active");
   if (propFilter) activeData = activeData.filter(r=>(r["Property"]||"")===propFilter);
 
-  // Build NM->MM lookup from hoods
   const nmToMM = {};
   hoods.forEach(h => {
     if (h.nano_market && h.micro_market) nmToMM[h.nano_market] = h.micro_market;
@@ -2060,7 +2190,6 @@ function renderNmMmSummary() {
 
     const ss = getSortState(tableId);
 
-    // Build per-group data
     const tableData = groups.map(g => {
       const gRows = activeData.filter(r => r[groupKey] === g);
       const cats = {};
@@ -2080,7 +2209,6 @@ function renderNmMmSummary() {
       return { group: g, mm, total, ...cats };
     });
 
-    // Unmatched rows: props whose NM/MM doesn't exist in hoods at all
     const knownGroups = new Set(groups);
     const unmatchedRows = activeData.filter(r => {
       const val = (r[groupKey] || "").trim();
@@ -2103,7 +2231,6 @@ function renderNmMmSummary() {
       unmatchedEntry = { group: "⚠️ Unmatched / No Hood", mm: "—", total, ...cats };
     }
 
-    // Grand total row across all groups including unmatched
     const allEntries = unmatchedEntry ? [...tableData, unmatchedEntry] : tableData;
     const grandCats = {};
     FIXED_CATEGORIES.forEach(c => {
@@ -2151,7 +2278,6 @@ function renderNmMmSummary() {
       ${FIXED_CATEGORIES.map(c => `<td style="color:#1a3a7a">${grandCats[c] || 0}</td>`).join("")}
     </tr>`;
 
-    // Unmatched property cards with name + current NM/MM value
     const unmatchedListHtml = unmatchedEntry ? (() => {
       const unmatchedNames = unmatchedRows.map(r => {
         const name  = (r["Name of the property"] || "").trim() || "Unnamed";
@@ -2446,7 +2572,6 @@ function downloadReminderCSV() {
 
 // ============================================================
 // HOTSPOT COVERAGE TABLE
-// FIX: property-level cells all have explicit text-align:left
 // ============================================================
 function haversineMetres(lat1, lng1, lat2, lng2) {
   const R = 6371000;

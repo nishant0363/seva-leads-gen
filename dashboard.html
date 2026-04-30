@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Seva Property Dashboard</title>
+
+  <link rel="stylesheet" href="style.css"/>
+  <!-- MapLibre GL JS replaces Leaflet -->
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    /* ── MapLibre popup override to match old Leaflet style ── */
+    .maplibregl-popup-content {
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      border-radius: 8px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+      min-width: 160px;
+      max-width: 280px;
+    }
+    .maplibregl-popup-close-button {
+      font-size: 16px;
+      color: #888;
+      padding: 2px 6px;
+    }
+    /* Map canvas cursor override for add-point mode */
+    .map-crosshair .maplibregl-canvas { cursor: crosshair !important; }
+
+    /* ── Download buttons ── */
+    .download-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .download-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #555;
+      white-space: nowrap;
+    }
+    .dl-btn {
+      font-size: 11px;
+      padding: 4px 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      color: #fff;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .dl-nm  { background: #2c3e50; }
+    .dl-mm  { background: #8e44ad; }
+    .dl-pt  { background: #27ae60; }
+    .dl-hs  { background: #e67e22; }
+    .dl-dm  { background: #2471a3; }
+    .dl-id  { background: #c0392b; }
+    .dl-ct  { background: #1e8449; }
+
+    /* ── Map Legend ── */
+    .map-legend {
+      position: absolute;
+      bottom: 30px;
+      right: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.95);
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      font-size: 13px;
+      min-width: 160px;
+      pointer-events: all;
+    }
+    .legend-title {
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #555;
+      margin-bottom: 7px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #eee;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 0;
+      border-radius: 4px;
+      transition: background 0.15s;
+      user-select: none;
+    }
+    .legend-item:hover { background: #f5f5f5; }
+    .legend-symbol { font-size: 14px; width: 18px; text-align: center; }
+    .legend-label { flex: 1; color: #333; }
+    .legend-eye { font-size: 12px; opacity: 0.6; }
+
+    /* ── Modal readonly fields ── */
+    .modal-field input[readonly] {
+      background: #f0f8f0;
+      color: #27ae60;
+      font-weight: 700;
+    }
+
+    /* ── Sheet filter bar ── */
+    .sheet-filter-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 0 6px;
+    }
+    .sheet-filter-bar:first-of-type {
+      border-top: 1px solid #eee;
+      margin-top: 8px;
+      padding-top: 10px;
+    }
+    .sheet-filter-bar + .sheet-filter-bar {
+      padding-top: 0;
+      border-top: none;
+    }
+    .sheet-filter-bar select {
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .date-filter-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      white-space: nowrap;
+    }
+    .sheet-filter-bar input[type="date"] {
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    /* ── Sheet preview header flex ── */
+    .sheet-preview-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .sheet-preview-header h3 { margin: 0; }
+
+    /* ── Totals footer row ── */
+    #sheetPreviewTable tfoot td {
+      background: #f0f4f8;
+      border-top: 2px solid #d0d0d0;
+      font-size: 12px;
+      padding: 5px 8px;
+      text-align: center;
+      position: sticky;
+      bottom: 0;
+    }
+    #sheetPreviewTable tfoot td:first-child { text-align: left; }
+    .summary-dl-btn {
+      font-size: 11px;
+      padding: 4px 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      background: #16a085;
+      color: #fff;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .summary-dl-btn:hover { opacity: 0.82; }
+    .summary-table-wrapper { overflow-x: auto; }
+    .summary-table {
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 400px;
+      width: 100%;
+    }
+    .summary-table th {
+      background: #f0f4f8;
+      padding: 7px 10px;
+      text-align: center;
+      font-weight: 600;
+      color: #444;
+      border: 1px solid #e0e0e0;
+      white-space: nowrap;
+    }
+    .summary-table th:first-child { text-align: left; }
+    .summary-table td {
+      padding: 6px 10px;
+      text-align: center;
+      border: 1px solid #ebebeb;
+      color: #333;
+      white-space: nowrap;
+    }
+    .summary-table td:first-child { text-align: left; }
+    .summary-table tbody tr:nth-child(even) { background: #fafafa; }
+    .summary-table tbody tr:hover { background: #eef4ff; }
+    .summary-total-row td { background: #f0f4f8 !important; border-top: 2px solid #d0d0d0; }
+    .summary-finalised-row td { background: #e8f8f0 !important; color: #1a7a4a; font-weight: 600; }
+    .summary-closure-header td { background: #f4f0ff !important; color: #5b2d8e; font-size: 12px; }
+    .summary-block { margin-bottom: 22px; }
+    .summary-block-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 6px;
+    }
+    .summary-block-title {
+      font-size: 13px; font-weight: 700; color: #555;
+      text-transform: uppercase; letter-spacing: 0.4px;
+      margin: 0; padding-bottom: 4px;
+      border-bottom: 2px solid #e8e8e8; flex: 1;
+    }
+
+    /* ── Detail panel dropdowns ── */
+    .detail-select {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .detail-select:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 0 2px rgba(52,152,219,0.15);
+    }
+    .summary-table-wrapper {
+      overflow-x: auto;
+    }
+    .summary-table {
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 400px;
+      width: 100%;
+    }
+    .summary-table th {
+      background: #f0f4f8;
+      padding: 7px 10px;
+      text-align: center;
+      font-weight: 600;
+      color: #444;
+      border: 1px solid #e0e0e0;
+      white-space: nowrap;
+    }
+    .summary-table th:first-child { text-align: left; }
+    .summary-table td {
+      padding: 6px 10px;
+      text-align: center;
+      border: 1px solid #ebebeb;
+      color: #333;
+    }
+    .summary-table td:first-child { text-align: left; font-size: 11px; }
+    .summary-table tbody tr:nth-child(even) { background: #fafafa; }
+    .summary-table tbody tr:hover { background: #eef4ff; }
+    .summary-total-row td {
+      background: #f0f4f8 !important;
+      border-top: 2px solid #d0d0d0;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="app">
+
+    <!-- HEADER -->
+    <div class="header">
+      <h2>📍 Seva Property Map</h2>
+    </div>
+
+    <!-- ACTION BUTTONS -->
+    <div class="container">
+      <div class="actions centered">
+        <button onclick="refreshData()">⟳ Refresh</button>
+        <button onclick="saveCurrent()">💾 Save</button>
+        <button onclick="fixMissingNM()">⚡ Fix NM/MM</button>
+        <button onclick="fillLatLong()">🌍 Fill Lat/Long</button>
+        <button id="btnAddPoint" class="primary" onclick="toggleAddPointMode()">➕ Add Point</button>
+        <button id="btnMarkCircles" onclick="toggleMarkCirclesMode()">⭕ Mark Circle Points</button>
+      </div>
+    </div>
+
+    <!-- FILTERS + DOWNLOAD -->
+    <div class="container">
+      <div class="filters map-filter-bar">
+        <select id="filterCategory"><option value="">Category</option></select>
+        <select id="filterProperty"><option value="">Property</option></select>
+        <select id="filterAppStatus"><option value="">App status</option></select>
+        <select id="filterLeadStatus"><option value="">Lead Status</option></select>
+        <select id="filterFinalStatus"><option value="">Final Status</option></select>
+        <select id="filterNM"><option value="">NM</option></select>
+        <select id="filterMM"><option value="">MM</option></select>
+        <input type="date" id="filterDateFrom" onchange="applyFilters()" title="From date" />
+        <input type="date" id="filterDateTo"   onchange="applyFilters()" title="To date" />
+        <button class="primary" onclick="applyFilters()">Apply</button>
+        <button onclick="clearFilters()">Clear</button>
+      </div>
+
+      <!-- DOWNLOAD ROW -->
+      <div class="download-row">
+        <span class="download-label">⬇ Properties:</span>
+        <button class="dl-btn dl-nm"  onclick="downloadLayerKML('nm')">🗺 NM KML</button>
+        <button class="dl-btn dl-mm"  onclick="downloadLayerKML('mm')">🗺 MM KML</button>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerKML('points')">📍 KML</button>
+        <button class="dl-btn dl-nm"  onclick="downloadLayerCSV('nm')">📄 NM CSV</button>
+        <button class="dl-btn dl-mm"  onclick="downloadLayerCSV('mm')">📄 MM CSV</button>
+        <button class="dl-btn dl-pt"  onclick="downloadLayerCSV('points')">📄 CSV</button>
+      </div>
+      <div class="download-row">
+        <span class="download-label">⬇ Layers (filtered):</span>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','kml')">🔥 Hotspots KML</button>
+        <button class="dl-btn dl-hs"  onclick="downloadExtraLayer('hotspots','csv')">🔥 Hotspots CSV</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','kml')">📦 Demand KML</button>
+        <button class="dl-btn dl-dm"  onclick="downloadExtraLayer('demand','csv')">📦 Demand CSV</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','kml')">🚗 Idle KML</button>
+        <button class="dl-btn dl-id"  onclick="downloadExtraLayer('idle','csv')">🚗 Idle CSV</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','kml')">📊 Centroids KML</button>
+        <button class="dl-btn dl-ct"  onclick="downloadExtraLayer('centroids','csv')">📊 Centroids CSV</button>
+      </div>
+    </div>
+
+    <!-- MAP + SEARCH + LEGEND -->
+    <div class="container">
+      <div class="map-card">
+        <!-- SEARCH BAR OVERLAID ON MAP -->
+        <div class="map-search-wrapper">
+          <input type="text" id="mapSearchInput" placeholder="🔍 Search location on map..." autocomplete="off"/>
+          <div id="mapSearchResults" class="search-results"></div>
+        </div>
+
+        <!-- LEGEND OVERLAID ON MAP -->
+        <div id="mapLegend" class="map-legend"></div>
+        <div class="map-style-toggle">
+          <button class="style-btn active" onclick="switchBaseMap('street', event)">Street</button>
+          <button class="style-btn" onclick="switchBaseMap('light', event)">Light</button>
+          <button class="style-btn" onclick="switchBaseMap('dark', event)">Dark</button>
+          <button class="style-btn" onclick="switchBaseMap('basic', event)">Basic</button>
+        </div>
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <!-- DETAILS -->
+    <div class="container">
+      <div class="details-card">
+        <h3>Details</h3>
+        <table id="detailsTable"></table>
+      </div>
+    </div>
+
+    <!-- SHEET PREVIEW -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 Sheet Preview</h3>
+          <span id="sheetRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadSheetPreviewCSV()" style="margin-left:auto">⬇ CSV</button>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <select id="sfCategory"><option value="">Category</option></select>
+          <select id="sfProperty"><option value="">Property</option></select>
+          <select id="sfAppStatus"><option value="">App Status</option></select>
+          <select id="sfLeadStatus"><option value="">Lead Status</option></select>
+          <select id="sfFinalStatus"><option value="">Final Status</option></select>
+          <select id="sfNM"><option value="">NM</option></select>
+          <select id="sfMM"><option value="">MM</option></select>
+        </div>
+        <div class="sheet-filter-bar" style="margin-top:6px">
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="sfDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="sfDateTo" />
+          <span class="date-filter-label">📅 Signage Date:</span>
+          <input type="date" id="sfSignageFrom" onchange="applySheetFilters()" />
+          <input type="date" id="sfSignageTo"   onchange="applySheetFilters()" />
+          <span class="date-filter-label">📅 Launch Date:</span>
+          <input type="date" id="sfLaunchFrom"  onchange="applySheetFilters()" />
+          <input type="date" id="sfLaunchTo"    onchange="applySheetFilters()" />
+          <button class="primary" onclick="applySheetFilters()">Apply</button>
+          <button onclick="clearSheetFilters()">Clear</button>
+        </div>
+
+        <div class="sheet-table-wrapper">
+          <table id="sheetPreviewTable"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUMMARY CROSS-TAB TABLES -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 Summary Tables</h3>
+          <span style="font-size:12px;color:#888">Final Status × Category &amp; Commercials breakdown</span>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <select id="stNM"><option value="">NM</option></select>
+          <select id="stMM"><option value="">MM</option></select>
+          <select id="stProperty"><option value="">Property (All)</option><option value="Public">Public</option><option value="Private">Private</option></select>
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="stDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="stDateTo" />
+          <button class="primary" onclick="applySummaryFilters()">Apply</button>
+          <button onclick="clearSummaryFilters()">Clear</button>
+        </div>
+
+        <div id="summaryTablesContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- BANGALORE OVERVIEW DASHBOARD — PRIVATE -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🏙️ Bangalore Overview — <span style="color:#8e44ad">Private</span></h3>
+          <span style="font-size:12px;color:#888">NM coverage, closures &amp; pipeline · Private properties only</span>
+        </div>
+        <div id="bangaloreOverviewContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- BANGALORE OVERVIEW DASHBOARD — ALL -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🏙️ Bangalore Overview — <span style="color:#2c3e50">All</span></h3>
+          <span style="font-size:12px;color:#888">NM coverage, closures &amp; pipeline · All active properties</span>
+        </div>
+        <div id="bangaloreOverviewAllContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- BANGALORE OVERVIEW DASHBOARD — PUBLIC -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🏙️ Bangalore Overview — <span style="color:#27ae60">Public</span></h3>
+          <span style="font-size:12px;color:#888">NM coverage, closures &amp; pipeline · Public properties only</span>
+        </div>
+        <div id="bangaloreOverviewPublicContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- NM / MM LEVEL SUMMARY -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>📊 NM &amp; MM Level Summary (Active Properties)</h3>
+        </div>
+        <div id="nmMmSummaryContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- REMINDER FOR PROPERTY CLOSURES -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔔 Reminder for Property Closures</h3>
+          <span id="reminderRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadReminderCSV()" style="margin-left:auto">⬇ CSV</button>
+        </div>
+        <div class="sheet-filter-bar">
+          <span class="date-filter-label">📅 Timestamp:</span>
+          <input type="date" id="reminderDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="reminderDateTo" />
+          <select id="reminderStatusFilter" style="min-width:180px">
+            <option value="">Reminder Status (All)</option>
+            <option value="Sign Pending">Sign Pending</option>
+            <option value="Chairs and Poster Pending">Chairs and Poster Pending</option>
+          </select>
+          <button class="primary" onclick="applyReminderFilters()">Apply</button>
+          <button onclick="clearReminderFilters()">Clear</button>
+        </div>
+        <div class="sheet-table-wrapper" style="margin-top:10px">
+          <table id="reminderTable"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOTSPOT COVERAGE -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔥 Hotspot Coverage</h3>
+          <span id="hotspotCoverageCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadHotspotCoverageCSV()" style="margin-left:auto">⬇ CSV</button>
+          <button id="btnSaveHotspotSheet" class="summary-dl-btn" onclick="saveHotspotCoverageToSheet()"
+                  style="margin-left:6px;background:#2c3e50">💾 Save to Sheet</button>
+          <span id="hotspotSheetSaveStatus" style="font-size:12px;color:#555;margin-left:8px"></span>
+        </div>
+
+        <div class="sheet-filter-bar" style="margin-top:6px">
+          <select id="hcFilterMM"       style="min-width:130px"><option value="">MM (All)</option></select>
+          <select id="hcFilterNM"       style="min-width:130px"><option value="">NM (All)</option></select>
+          <select id="hcFilterHotspot"  style="min-width:160px"><option value="">Hotspot (All)</option></select>
+          <select id="hcFilterClosed"   style="min-width:140px">
+            <option value="">isClosed (All)</option>
+            <option value="Yes">Yes — Closed</option>
+            <option value="No">No — Open</option>
+          </select>
+          <button class="primary" onclick="applyHotspotCoverageFilters()">Apply</button>
+          <button onclick="clearHotspotCoverageFilters()">Clear</button>
+        </div>
+
+        <div class="sheet-table-wrapper" style="margin-top:10px;max-height:520px;overflow-y:auto">
+          <table id="hotspotCoverageTable"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- RECALCULATE HOTSPOT DATA -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>🔄 Hotspot Enrichment</h3>
+        </div>
+        <p style="margin:6px 0 12px;font-size:13px;color:#666;line-height:1.6">
+          Recalculates <b>nearest hotspot</b>, <b>displacement</b>, <b>demand count</b>, <b>idle count</b>, and <b>launch feasibility</b> for all properties. This writes updated values back to the sheet — run only when hotspot/demand/idle data has changed.
+        </p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button id="btnRecalcHotspots" class="primary" onclick="recalculateHotspots()">🔄 Recalculate Hotspot Data</button>
+          <span id="recalcStatus" style="font-size:13px;color:#555"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- INCENTIVE TRACKER -->
+    <div class="container">
+      <div class="sheet-preview-card">
+        <div class="sheet-preview-header">
+          <h3>💰 Incentive Tracker</h3>
+          <span id="incRowCount" class="row-count"></span>
+          <button class="summary-dl-btn" onclick="downloadSummaryTable('incPrivateTable','incentive_private')" style="margin-left:auto">⬇ Private CSV</button>
+          <button class="summary-dl-btn" onclick="downloadSummaryTable('incPublicTable','incentive_public')" style="margin-left:4px">⬇ Public CSV</button>
+        </div>
+
+        <div class="sheet-filter-bar">
+          <span class="date-filter-label">📅 Date Range:</span>
+          <input type="date" id="incDateFrom" />
+          <span style="color:#888;font-size:13px">to</span>
+          <input type="date" id="incDateTo" />
+
+          <span class="date-filter-label">📍 Proximity:</span>
+          <select id="incProximity" style="min-width:180px">
+            <option value="all">All properties</option>
+            <option value="250">≤ 250m from hotspot only</option>
+          </select>
+
+          <span class="date-filter-label">🔁 Duplicates:</span>
+          <select id="incDuplicates" style="min-width:180px">
+            <option value="all">Include duplicates</option>
+            <option value="exclude">Exclude duplicates</option>
+            <option value="only">Show duplicates only</option>
+          </select>
+
+          <button class="primary" onclick="applyIncentiveFilters()">Apply</button>
+          <button onclick="clearIncentiveFilters()">Clear</button>
+        </div>
+
+        <div id="incentiveContainer" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+  </div><!-- /.app -->
+
+  <!-- ADD POINT MODAL -->
+  <div id="addPointModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>➕ Add New Point</h3>
+        <button class="modal-close" onclick="closeAddPointModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid" id="addPointFields"></div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closeAddPointModal()">Cancel</button>
+        <button class="primary" onclick="submitAddPoint()">💾 Save Point</button>
+      </div>
+    </div>
+  </div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
